@@ -1,5 +1,5 @@
 """
-whiskysour — A high-performance BeautifulSoup-compatible HTML parser.
+whiskeysour — A high-performance BeautifulSoup-compatible HTML parser.
 
 Drop-in replacement for bs4.BeautifulSoup backed by a Rust core.
 """
@@ -21,11 +21,11 @@ from typing import (
 )
 
 try:
-    from whiskysour import _core
+    from whiskeysour import _core
 except ImportError as exc:  # pragma: no cover
     raise ImportError(
-        "whiskysour native extension not found. "
-        "Run `maturin develop` (or `pip install whiskysour`) to build it."
+        "whiskeysour native extension not found. "
+        "Run `maturin develop` (or `pip install whiskeysour`) to build it."
     ) from exc
 
 # ── Re-export low-level types ─────────────────────────────────────────────────
@@ -734,7 +734,7 @@ class WhiskeySour:
 
     Usage::
 
-        from whiskysour import WhiskeySour
+        from whiskeysour import WhiskeySour
         soup = WhiskeySour("<html><body><p>Hello</p></body></html>", "html.parser")
         print(soup.find("p").get_text())
     """

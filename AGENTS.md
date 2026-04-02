@@ -31,7 +31,7 @@ PATH="$HOME/.cargo/bin:$PATH" maturin develop --release # release build (require
 ### Type-check Rust without building
 
 ```bash
-~/.cargo/bin/cargo check -p whiskysour-py
+~/.cargo/bin/cargo check -p whiskeysour-py
 ```
 
 ### Lint and format
@@ -82,11 +82,11 @@ Do not submit changes that reduce these numbers.
 ```
 WhiskeySour/
 ├── Cargo.toml                      # Rust workspace (two crates)
-├── pyproject.toml                  # maturin config; Python package = whiskysour
+├── pyproject.toml                  # maturin config; Python package = whiskeysour
 ├── pytest.ini
 │
 ├── crates/
-│   ├── whiskysour-core/            # Pure Rust library — no Python dependency
+│   ├── whiskeysour-core/            # Pure Rust library — no Python dependency
 │   │   └── src/
 │   │       ├── node.rs             # NodeId (u32), NodeData enum, Attr, arena types
 │   │       ├── document.rs         # Document: flat Vec<Node> arena
@@ -96,10 +96,10 @@ WhiskeySour/
 │   │       ├── query/              # find / find_all / select
 │   │       └── serialize/          # HTML output + prettify
 │   │
-│   └── whiskysour-py/
+│   └── whiskeysour-py/
 │       └── src/lib.rs              # PyO3 bindings: _Tag, _Document Python classes
 │
-├── python/whiskysour/
+├── python/whiskeysour/
 │   ├── __init__.py                 # Full BS4-compatible Python API
 │   └── _core.pyi                  # Type stubs
 │
@@ -117,17 +117,17 @@ WhiskeySour/
 
 These layers must remain separate. Do not merge their responsibilities.
 
-### Layer 1 — `whiskysour-core` (pure Rust)
+### Layer 1 — `whiskeysour-core` (pure Rust)
 The tree is a flat `Vec<Node>` arena. A `NodeId` is a `u32` index — no pointers, no `Rc`, no `Box`. Each `Node` carries a `NodeData` enum variant: `Document`, `Element`, `Text`, `Comment`, `CData`, `ProcessingInstruction`, or `Doctype`.
 
 Element attributes use `SmallVec<[Attr; 4]>` — zero heap allocation for elements with ≤4 attrs (which covers the overwhelming majority of real HTML).
 
 This crate has no PyO3 dependency and must stay that way. It can be used as a standalone Rust library.
 
-### Layer 2 — `whiskysour-py/src/lib.rs`
+### Layer 2 — `whiskeysour-py/src/lib.rs`
 PyO3 glue code only. `PyTag` = `Arc<RwLock<Document>>` + `NodeId`. Cloning is cheap. All non-trivial Rust work releases the Python GIL with `py.allow_threads(...)`.
 
-### Layer 3 — `python/whiskysour/__init__.py`
+### Layer 3 — `python/whiskeysour/__init__.py`
 The BeautifulSoup-compatible Python shim. Key components:
 - `Tag` — wraps `_Tag` (a `PyTag`), exposes the full BS4 API.
 - `NavigableString` — a `str` subclass with `name = None` (class attribute) and navigation properties.
@@ -232,7 +232,7 @@ WS uses html5ever (the Firefox/Chrome HTML parser). It is more spec-correct than
 ## Rust code rules
 
 - `cargo fmt` and `cargo clippy -- -D warnings` must pass. Clippy warnings are CI errors.
-- `whiskysour-core` must have **zero PyO3 imports**. It is a pure Rust library.
+- `whiskeysour-core` must have **zero PyO3 imports**. It is a pure Rust library.
 - Do not use `unwrap()` in production code. Use `?` or explicit `match`. `unwrap()` is permitted in tests and `#[cfg(test)]` blocks.
 - `NodeId` is `u32`. Do not widen it.
 - `unsafe` requires a `// SAFETY:` comment that explains why the block is sound and why a safe alternative is not available.

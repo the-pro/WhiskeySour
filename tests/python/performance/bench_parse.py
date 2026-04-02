@@ -4,7 +4,7 @@ bench_parse.py — Parse latency benchmarks.
 Run with: pytest tests/python/performance/bench_parse.py --benchmark-only
 Or:       pytest tests/python/performance/ -m perf -v
 
-Benchmarks compare whiskysour against bs4+html.parser, bs4+lxml (if available),
+Benchmarks compare whiskeysour against bs4+html.parser, bs4+lxml (if available),
 and lxml.etree directly.
 
 Targets (from project_plan.md Phase 4):

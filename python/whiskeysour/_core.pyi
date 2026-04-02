@@ -1,4 +1,4 @@
-"""Type stubs for the whiskysour Rust extension module."""
+"""Type stubs for the whiskeysour Rust extension module."""
 
 from typing import Any, Dict, Iterator, List, Optional
 

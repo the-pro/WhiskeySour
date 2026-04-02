@@ -77,7 +77,7 @@ def bs4_soup():
 # ===========================================================================
 
 class TestConstructor:
-    def test_whiskysour_callable(self, ws):
+    def test_whiskeysour_callable(self, ws):
         soup = ws.WhiskeySour(COMPAT_HTML, "html.parser")
         assert soup is not None
 
@@ -318,7 +318,7 @@ class TestNavigableStringTypes:
     def test_comment_type(self, ws, parse):
         soup = parse("<!-- a comment --><p>after</p>")
         try:
-            from whiskysour import Comment  # type: ignore[import]
+            from whiskeysour import Comment  # type: ignore[import]
         except ImportError:
             Comment = type(None)
         comment = soup.find(string=re.compile("a comment"))

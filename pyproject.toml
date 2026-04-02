@@ -3,7 +3,7 @@ requires      = ["maturin>=1.5,<2.0"]
 build-backend = "maturin"
 
 [project]
-name            = "whiskysour"
+name            = "whiskeysour"
 version         = "0.1.0"
 description     = "High-performance BeautifulSoup replacement written in Rust"
 readme          = "README.md"
@@ -27,5 +27,5 @@ dev = ["pytest", "pytest-benchmark", "hypothesis", "beautifulsoup4", "lxml"]
 manifest-path   = "crates/whiskysour-py/Cargo.toml"
 # Pure-Python wrapper lives here; maturin copies it into the wheel
 python-source   = "python"
-module-name     = "whiskysour._core"
+module-name     = "whiskeysour._core"
 features        = ["pyo3/extension-module"]

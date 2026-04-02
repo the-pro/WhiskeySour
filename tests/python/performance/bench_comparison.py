@@ -145,7 +145,7 @@ def run_suite(html: str, rounds: int) -> dict[str, dict[str, dict]]:
     """
     Returns { operation_name: { "ws": stats, "bs4": stats } }
     """
-    import whiskysour as ws
+    import whiskeysour as ws
     from bs4 import BeautifulSoup
 
     results: dict[str, dict[str, dict]] = {}
@@ -570,9 +570,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
-        import whiskysour  # noqa
+        import whiskeysour  # noqa
     except ImportError:
-        sys.exit("ERROR: whiskysour not installed. Run: maturin develop")
+        sys.exit("ERROR: whiskeysour not installed. Run: maturin develop")
     try:
         import bs4  # noqa
     except ImportError:

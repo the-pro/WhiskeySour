@@ -25,15 +25,15 @@ import pytest
 FIXTURES_DIR = Path(__file__).parent / "fixtures"
 
 
-def _get_whiskysour():
-    """Import whiskysour, falling back to bs4 stub for early TDD runs."""
+def _get_whiskeysour():
+    """Import whiskeysour, falling back to bs4 stub for early TDD runs."""
     try:
-        import whiskysour as ws  # noqa: F401 – real package once built
+        import whiskeysour as ws  # noqa: F401 – real package once built
         return ws
     except ImportError:
         # Stub: tests are written against this API; implementation TBD.
         raise ImportError(
-            "whiskysour is not yet installed. "
+            "whiskeysour is not yet installed. "
             "Run `maturin develop` inside the project root to build the Rust extension. "
             "All tests will FAIL until the extension is built — this is expected during TDD phase."
         )
@@ -45,8 +45,8 @@ def _get_whiskysour():
 
 @pytest.fixture
 def ws():
-    """The whiskysour module itself."""
-    return _get_whiskysour()
+    """The whiskeysour module itself."""
+    return _get_whiskeysour()
 
 
 @pytest.fixture

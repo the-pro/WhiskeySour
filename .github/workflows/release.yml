@@ -153,7 +153,7 @@ jobs:
       - name: Install wheel + test dependencies
         shell: bash
         run: |
-          pip install --find-links dist whiskysour
+          pip install --find-links dist whiskeysour
           pip install pytest beautifulsoup4
 
       - name: Run unit tests

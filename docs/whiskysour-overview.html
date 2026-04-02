@@ -424,7 +424,7 @@ from bs4 import BeautifulSoup
 soup = BeautifulSoup(html, "html.parser")
 
 # After this everything else stays the same
-from whiskysour import WhiskeySour as BeautifulSoup
+from whiskeysour import WhiskeySour as BeautifulSoup
 soup = BeautifulSoup(html, "html.parser")</code></pre>
 
   <p>The library is built on five technical pillars, each targeting a specific weakness in BeautifulSoup's design.</p>
@@ -675,7 +675,7 @@ html    = str(soup)
 <section id="api">
   <h2>9. API Compatibility</h2>
 
-  <p>WhiskeySour passes a 450-test unit suite and 508 tests including integration coverage, all modelled directly on BeautifulSoup's documented behaviour. The shim layer in <code>python/whiskysour/__init__.py</code> translates between the Rust node types and Python objects that satisfy every public BeautifulSoup API contract.</p>
+  <p>WhiskeySour passes a 450-test unit suite and 508 tests including integration coverage, all modelled directly on BeautifulSoup's documented behaviour. The shim layer in <code>python/whiskeysour/__init__.py</code> translates between the Rust node types and Python objects that satisfy every public BeautifulSoup API contract.</p>
 
   <p>The compatibility strategy is deliberate: the Rust layer exposes only what it is fast at (tree storage, traversal, matching), and the Python shim handles the ergonomic API surface (property access, string formatting, lazy wrapping). No Python object is created until explicitly requested by the caller.</p>
 

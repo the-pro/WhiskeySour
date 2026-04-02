@@ -487,7 +487,7 @@ class TestNavigableString:
         assert nxt is not None
 
     def test_comment_type(self, parse):
-        from whiskysour import Comment  # type: ignore[import]
+        from whiskeysour import Comment  # type: ignore[import]
         soup = parse("<!-- my comment --><p>after</p>")
         comments = soup.find_all(string=lambda t: isinstance(t, Comment))
         assert len(comments) == 1

@@ -42,7 +42,7 @@ Key implementation choices:
 ## API — drop-in compatible with BeautifulSoup
 
 ```python
-from whiskysour import WhiskeySour
+from whiskeysour import WhiskeySour
 
 # Same as BeautifulSoup(html, "html.parser")
 soup = WhiskeySour(html, "html.parser")
@@ -60,7 +60,7 @@ for child in tag.children:
         print(child.name)
 
 # Drop-in alias
-from whiskysour import BeautifulSoup   # same class, different name
+from whiskeysour import BeautifulSoup   # same class, different name
 ```
 
 ### WhiskeySour extensions (not in bs4)
@@ -72,7 +72,7 @@ for doc in documents:
     results = q.select(doc)
 
 # Streaming parser — feed chunks incrementally
-from whiskysour import StreamParser, parse_stream
+from whiskeysour import StreamParser, parse_stream
 
 with StreamParser() as parser:
     for chunk in response.iter_content(4096):
@@ -114,7 +114,7 @@ WhiskeySour/
 ├── pytest.ini                  # test configuration
 │
 ├── crates/
-│   ├── whiskysour-core/        # Pure Rust library (no Python deps)
+│   ├── whiskeysour-core/        # Pure Rust library (no Python deps)
 │   │   └── src/
 │   │       ├── parser/         # html5ever integration
 │   │       ├── node.rs         # Arena-allocated node pool
@@ -123,12 +123,12 @@ WhiskeySour/
 │   │       ├── query/          # find() / find_all() / select()
 │   │       └── serialize/      # HTML serialisation + prettify
 │   │
-│   └── whiskysour-py/          # PyO3 bindings layer
+│   └── whiskeysour-py/          # PyO3 bindings layer
 │       └── src/
 │           └── lib.rs          # _Tag, _Document Python classes
 │
 ├── python/
-│   └── whiskysour/
+│   └── whiskeysour/
 │       ├── __init__.py         # Public API + BeautifulSoup alias
 │       └── _core.pyi           # Type stubs for Rust extension
 │
@@ -224,7 +224,7 @@ open bench_report.html
 
 ```bash
 # Rust checks (no build required)
-~/.cargo/bin/cargo check -p whiskysour-py
+~/.cargo/bin/cargo check -p whiskeysour-py
 
 # Dev build (fast recompile, debug symbols)
 maturin develop

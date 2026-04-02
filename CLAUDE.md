@@ -27,7 +27,7 @@ PATH="$HOME/.cargo/bin:$PATH" maturin develop
 PATH="$HOME/.cargo/bin:$PATH" maturin develop --release
 
 # Rust type-check without building (fast)
-~/.cargo/bin/cargo check -p whiskysour-py
+~/.cargo/bin/cargo check -p whiskeysour-py
 
 # Run unit tests (primary test suite)
 source .venv/bin/activate && .venv/bin/pytest tests/python/unit/ --override-ini="addopts=" -q
@@ -56,10 +56,10 @@ python tests/python/performance/bench_comparison.py
 ```
 WhiskeySour/
 ├── Cargo.toml                      # Workspace root (two crates)
-├── pyproject.toml                  # maturin build config; module = whiskysour._core
+├── pyproject.toml                  # maturin build config; module = whiskeysour._core
 │
 ├── crates/
-│   ├── whiskysour-core/            # Pure Rust library (no Python dependency)
+│   ├── whiskeysour-core/            # Pure Rust library (no Python dependency)
 │   │   └── src/
 │   │       ├── node.rs             # Arena-allocated DOM: NodeId (u32), NodeData enum
 │   │       ├── document.rs         # Document struct: flat Vec<Node> arena
@@ -69,10 +69,10 @@ WhiskeySour/
 │   │       ├── query/              # find() / find_all() / select() logic
 │   │       └── serialize/          # HTML serialisation + prettify
 │   │
-│   └── whiskysour-py/
+│   └── whiskeysour-py/
 │       └── src/lib.rs              # All PyO3 bindings: PyTag (_Tag) + PyDocument (_Document)
 │
-├── python/whiskysour/
+├── python/whiskeysour/
 │   ├── __init__.py                 # Public Python API: Tag, NavigableString, WhiskeySour, etc.
 │   └── _core.pyi                  # Type stubs for the Rust extension
 │
@@ -90,20 +90,20 @@ WhiskeySour/
 
 **Never collapse these layers.** The split is intentional and load-bearing.
 
-### Layer 1 — `whiskysour-core` (pure Rust)
+### Layer 1 — `whiskeysour-core` (pure Rust)
 - Zero Python dependency. Can be used as a standalone Rust crate.
 - `Document` = flat `Vec<Node>` arena; `NodeId` = `u32` index. No heap allocation per node beyond the arena itself.
 - `NodeData` is an enum: `Document | Element { name, attrs, self_closing, is_template } | Text | Comment | CData | ProcessingInstruction | Doctype`.
 - `attrs` on elements: `SmallVec<[Attr; 4]>` — avoids heap alloc for elements with ≤4 attributes.
 - The tree is owned by `Document`, shared across threads via `Arc<RwLock<Document>>`.
 
-### Layer 2 — `whiskysour-py` (`crates/whiskysour-py/src/lib.rs`)
+### Layer 2 — `whiskeysour-py` (`crates/whiskeysour-py/src/lib.rs`)
 - PyO3 bindings only. No parsing or query logic here.
 - `PyTag` holds `Arc<RwLock<Document>>` + `NodeId`. Cloning is cheap (Arc clone).
 - `PyDocument` is the document root wrapper.
 - All Rust tree operations release the GIL (`py.allow_threads(...)`) so concurrent Python threads can parse simultaneously.
 
-### Layer 3 — `python/whiskysour/__init__.py`
+### Layer 3 — `python/whiskeysour/__init__.py`
 - BeautifulSoup-compatible Python shim.
 - `_wrap(rust_obj)` dispatches `node_type` → `Tag | NavigableString | Comment | ...`
 - `_AttrProxy` — a `dict` subclass that syncs mutations back to Rust. **Created lazily** (only when `.attrs` is accessed); never create it on hot read paths.
@@ -125,7 +125,7 @@ These are non-negotiable. A >5% regression against the baseline blocks merge.
 
 5. **`SmallVec<[Attr; 4]>` on element attrs** avoids a heap allocation for the common case of ≤4 attributes. Do not change this to `Vec` without a benchmark justifying it.
 
-6. **Selector LRU cache** in `whiskysour-core/selector/` caches compiled DFAs. Do not clear it eagerly or add locks that serialise selector access across threads.
+6. **Selector LRU cache** in `whiskeysour-core/selector/` caches compiled DFAs. Do not clear it eagerly or add locks that serialise selector access across threads.
 
 7. **Run benchmarks with `--release` builds** (`maturin develop --release`) before reporting numbers. Dev builds are 2–3× slower.
 
@@ -209,7 +209,7 @@ WhiskeySour aims to be a faithful drop-in. When touching the Python shim:
 ## Rust code rules
 
 - Run `cargo fmt` and `cargo clippy -- -D warnings` before committing Rust changes. Clippy warnings are errors.
-- Keep `whiskysour-core` free of any PyO3 dependency. It must remain usable as a pure Rust library.
+- Keep `whiskeysour-core` free of any PyO3 dependency. It must remain usable as a pure Rust library.
 - Prefer `&str` over `String` in function signatures where ownership is not needed.
 - `NodeId` is `u32`. Do not widen to `usize` or `u64` — it would inflate the arena.
 - Do not use `unwrap()` in production code paths. Use `?` or explicit error handling. `unwrap()` is acceptable in tests.
