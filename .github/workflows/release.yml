@@ -89,23 +89,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Install each Python version so maturin can find them via --find-interpreter.
-      # Windows has no `python3.x` symlinks; setup-python adds each to PATH.
-      - uses: actions/setup-python@v5
-        with:
-          python-version: |
-            3.9
-            3.10
-            3.11
-            3.12
-            3.13
-
+      # abi3 + generate-import-lib: PyO3 synthesises the Windows import lib
+      # at build time so no Python interpreter needs to be present.
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           target: x86_64-pc-windows-msvc
           command: build
-          args: --release --out dist --find-interpreter
+          args: --release --out dist
 
       - uses: actions/upload-artifact@v4
         with:
