@@ -1,0 +1,17 @@
+[package]
+name        = "whiskysour-py"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name   = "whiskysour"
+crate-type = ["cdylib"]
+
+[dependencies]
+whiskysour-core = { path = "../whiskysour-core" }
+pyo3            = { version = "0.22", features = ["extension-module", "abi3-py39", "gil-refs"] }
+rayon           = "1.10"
+markup5ever     = "0.12"
+smallvec        = { version = "1.13", features = ["union"] }
+
+[build-dependencies]

@@ -1,0 +1,180 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run — build wheels but skip PyPI upload'
+        type: boolean
+        default: false
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Linux (manylinux + musllinux) ─────────────────────────────────────────
+  build-linux:
+    name: Linux wheels (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64
+          - aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels (manylinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: auto
+          command: build
+          args: >
+            --release
+            --out dist
+            --interpreter python3.9 python3.10 python3.11 python3.12 python3.13
+
+      - name: Build wheels (musllinux)
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          manylinux: musllinux_1_2
+          command: build
+          args: >
+            --release
+            --out dist
+            --interpreter python3.9 python3.10 python3.11 python3.12 python3.13
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-linux-${{ matrix.target }}
+          path: dist/
+
+  # ── macOS ──────────────────────────────────────────────────────────────────
+  build-macos:
+    name: macOS wheels (${{ matrix.target }})
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-apple-darwin     # Intel
+          - aarch64-apple-darwin    # Apple Silicon
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: ${{ matrix.target }}
+          command: build
+          args: >
+            --release
+            --out dist
+            --interpreter python3.9 python3.10 python3.11 python3.12 python3.13
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-macos-${{ matrix.target }}
+          path: dist/
+
+  # ── Windows ────────────────────────────────────────────────────────────────
+  build-windows:
+    name: Windows wheels
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build wheels
+        uses: PyO3/maturin-action@v1
+        with:
+          target: x86_64-pc-windows-msvc
+          command: build
+          args: >
+            --release
+            --out dist
+            --interpreter python3.9 python3.10 python3.11 python3.12 python3.13
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-windows-x86_64
+          path: dist/
+
+  # ── Source distribution ────────────────────────────────────────────────────
+  build-sdist:
+    name: Source distribution
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build sdist
+        uses: PyO3/maturin-action@v1
+        with:
+          command: sdist
+          args: --out dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdist
+          path: dist/
+
+  # ── Tests: run unit suite against the built wheel ─────────────────────────
+  test:
+    name: Test wheel — ${{ matrix.os }} / Python ${{ matrix.python }}
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest,  python: '3.9'
+          - os: ubuntu-latest,  python: '3.13'
+          - os: macos-latest,   python: '3.13'
+          - os: windows-latest, python: '3.13'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist/
+
+      - name: Install wheel + test dependencies
+        shell: bash
+        run: |
+          pip install --find-links dist whiskysour
+          pip install pytest beautifulsoup4
+
+      - name: Run unit tests
+        run: pytest tests/python/unit/ --override-ini="addopts=" -q -m "not slow"
+
+  # ── Publish to PyPI ────────────────────────────────────────────────────────
+  publish:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build-linux, build-macos, build-windows, build-sdist, test]
+    if: ${{ !inputs.dry_run }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/whiskysour
+    permissions:
+      id-token: write   # required for OIDC trusted publishing
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist/
+
+      - name: Show artefacts
+        run: ls -lh dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

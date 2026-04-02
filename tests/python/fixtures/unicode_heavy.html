@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <title>Unicode Test — 日本語・한국어・中文</title>
+</head>
+<body>
+
+<section id="japanese" lang="ja">
+  <h1>日本語テスト</h1>
+  <p>これはHTMLパーサーのテスト用の日本語テキストです。漢字、ひらがな、カタカナが含まれています。</p>
+  <p>東京都渋谷区神宮前一丁目</p>
+  <ul>
+    <li>ひらがな: あいうえおかきくけこさしすせそ</li>
+    <li>カタカナ: アイウエオカキクケコサシスセソ</li>
+    <li>漢字: 山川海空森林雨雪風雷</li>
+  </ul>
+</section>
+
+<section id="korean" lang="ko">
+  <h1>한국어 테스트</h1>
+  <p>이것은 HTML 파서 테스트를 위한 한국어 텍스트입니다.</p>
+  <p>가나다라마바사아자차카타파하</p>
+</section>
+
+<section id="chinese-simplified" lang="zh-Hans">
+  <h1>中文（简体）测试</h1>
+  <p>这是用于HTML解析器测试的中文文本。包含汉字和标点符号。</p>
+  <p>北京市朝阳区建国门外大街</p>
+</section>
+
+<section id="chinese-traditional" lang="zh-Hant">
+  <h1>中文（繁體）測試</h1>
+  <p>這是用於HTML解析器測試的繁體中文文本。</p>
+</section>
+
+<section id="arabic" lang="ar" dir="rtl">
+  <h1>اختبار اللغة العربية</h1>
+  <p>هذا نص باللغة العربية لاختبار محلل HTML. يجب أن يتعامل المحلل مع النص من اليمين إلى اليسار بشكل صحيح.</p>
+</section>
+
+<section id="hebrew" lang="he" dir="rtl">
+  <h1>בדיקת עברית</h1>
+  <p>זהו טקסט בעברית לבדיקת מנתח HTML.</p>
+</section>
+
+<section id="greek" lang="el">
+  <h1>Ελληνικά δοκιμή</h1>
+  <p>Αυτό είναι ελληνικό κείμενο για δοκιμή του αναλυτή HTML.</p>
+  <p>Αλφάβητο: αβγδεζηθικλμνξοπρστυφχψω</p>
+</section>
+
+<section id="russian" lang="ru">
+  <h1>Тест на русском языке</h1>
+  <p>Это русский текст для тестирования HTML-парсера. Кириллица должна обрабатываться правильно.</p>
+  <p>Алфавит: абвгдеёжзийклмнопрстуфхцчшщъыьэюя</p>
+</section>
+
+<section id="emoji" class="emoji-section">
+  <h1>Emoji Test 🎉</h1>
+  <p>Basic emoji: 😀 😃 😄 😁 😆 😅 🤣 😂 🙂 🙃</p>
+  <p>Flag emoji: 🇯🇵 🇰🇷 🇨🇳 🇺🇸 🇬🇧 🇩🇪 🇫🇷</p>
+  <p>Skin tones: 👋🏻 👋🏼 👋🏽 👋🏾 👋🏿</p>
+  <p>ZWJ sequences: 👨‍👩‍👧‍👦 👩‍💻 🧑‍🚀 👨‍🍳</p>
+  <p>Math: ∀ ∁ ∂ ∃ ∄ ∅ ∆ ∇ ∈ ∉ ∊ ∋ ∌ ∍ ∎ ∏</p>
+  <p>Arrows: ← → ↑ ↓ ↔ ↕ ⇒ ⇐ ⇑ ⇓ ⇔ ⇕</p>
+  <p>Currency: $ € £ ¥ ₩ ₹ ₿ ¢</p>
+</section>
+
+<section id="special-chars">
+  <h1>Special Characters</h1>
+  <p>HTML entities: &amp; &lt; &gt; &quot; &apos; &nbsp;</p>
+  <p>Named entities: &copy; &reg; &trade; &mdash; &ndash; &hellip;</p>
+  <p>Numeric entities (decimal): &#9731; &#9733; &#9829; &#9824;</p>
+  <p>Numeric entities (hex): &#x2603; &#x2605; &#x2665; &#x2660;</p>
+  <p>Combining characters: à á â ã ä å æ ç è é ê ë</p>
+  <p>Decomposed: a&#x0300; a&#x0301; a&#x0302; a&#x0303;</p>
+</section>
+
+<section id="mixed-direction">
+  <h1>Mixed Direction Text</h1>
+  <p>English text with <span lang="ar">عربي</span> embedded in it.</p>
+  <p>LTR with <bdi>مرحبا</bdi> auto-detected direction.</p>
+</section>
+
+<section id="lang-tags">
+  <!-- Various language subtags -->
+  <p lang="en-US">American English</p>
+  <p lang="en-GB">British English</p>
+  <p lang="zh-Hans-CN">Simplified Chinese in China</p>
+  <p lang="zh-Hant-TW">Traditional Chinese in Taiwan</p>
+  <p lang="sr-Cyrl">Serbian in Cyrillic</p>
+  <p lang="sr-Latn">Serbian in Latin</p>
+</section>
+
+<section id="zero-width">
+  <h1>Zero-Width Characters</h1>
+  <!-- Zero-width space, non-joiner, joiner, no-break space -->
+  <p>word&#x200B;break — zero-width space</p>
+  <p>non&#x200C;joiner — zero-width non-joiner</p>
+  <p>zero&#x200D;width&#x200D;joiner — ZWJ</p>
+  <p>no&#xFEFF;bom — byte order mark (should be stripped)</p>
+</section>
+
+</body>
+</html>

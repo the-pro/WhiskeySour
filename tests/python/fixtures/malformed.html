@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Malformed HTML Test</title>
+<!-- Unclosed meta tag (HTML4 style) -->
+<meta charset="UTF-8">
+</head>
+<body>
+
+<!-- 1: Unclosed tags -->
+<div id="unclosed-div">
+  <p id="unclosed-p">This paragraph is never closed
+  <p id="sibling-p">This sibling paragraph auto-closes the previous one</p>
+</div>
+
+<!-- 2: Misnested tags -->
+<div id="misnested">
+  <b><i>Bold and italic <b>nested bold</i> closes wrong</b>
+</div>
+
+<!-- 3: Missing closing tags for block elements -->
+<div id="missing-closes">
+  <h1>Heading one
+  <h2>Heading two inside h1
+  <p>Paragraph inside h2
+  <ul>
+    <li>Item one
+    <li>Item two
+    <li>Item three
+  </ul>
+</div>
+
+<!-- 4: Bare < and > characters -->
+<div id="bare-angles">
+  <p>The value of x < 10 and y > 5 should be fine.</p>
+  <p>3 < 5 > 2 — parser must not choke</p>
+</div>
+
+<!-- 5: Attribute without value / bare attributes -->
+<div id="bare-attrs">
+  <input type="checkbox" checked disabled readonly>
+  <video autoplay muted loop playsinline src="video.mp4">
+</div>
+
+<!-- 6: Attribute with unquoted value -->
+<div id="unquoted-attrs">
+  <font color=red size=3>Unquoted attribute values</font>
+  <img src=image.png alt=photo width=100 height=100>
+</div>
+
+<!-- 7: Duplicate attributes (first should win per HTML5) -->
+<div id="duplicate-attrs">
+  <span id="first" id="second" class="a" class="b">Duplicate attrs</span>
+</div>
+
+<!-- 8: Stray end tags -->
+<div id="stray-end-tags">
+  </b>This text has a stray closing bold tag before it</b>
+  </p>And a stray paragraph close
+  <p>Normal paragraph</p></div></div>
+
+<!-- 9: Deeply wrong nesting: table misnesting -->
+<div id="table-misnest">
+  <table>
+    <tr>
+      <td>Cell one</td>
+      <p>This paragraph is invalid inside a tr/td — foster parented</p>
+      <td>Cell two</td>
+    </tr>
+  </table>
+</div>
+
+<!-- 10: Script with </script> inside string literal -->
+<script id="tricky-script">
+  var html = "</script> this should not end the script block";
+  var x = 1;
+</script>
+<script id="tricky-script-2">
+  // The above might or might not parse correctly depending on implementation
+  var safe = true;
+</script>
+
+<!-- 11: Style with </style> in comment -->
+<style id="tricky-style">
+  /* </style> in comment */
+  body { color: red; }
+</style>
+
+<!-- 12: CDATA-like sections in HTML mode -->
+<div id="cdata-section">
+  <![CDATA[ This is not valid CDATA in HTML mode but should not crash ]]>
+</div>
+
+<!-- 13: Entity references — known, unknown, numeric -->
+<div id="entities">
+  <p>Known: &amp; &lt; &gt; &quot; &apos; &nbsp; &copy; &reg;</p>
+  <p>Numeric decimal: &#65; &#66; &#67;</p>
+  <p>Numeric hex: &#x41; &#x42; &#x43;</p>
+  <p>Unknown: &foobar; &nonexistent;</p>
+  <p>Malformed: &amp &lt &gt (missing semicolons)</p>
+</div>
+
+<!-- 14: Null bytes (should be replaced with replacement char) -->
+<div id="null-bytes">
+  <p>Text with null&#0;byte should be handled gracefully.</p>
+</div>
+
+<!-- 15: Empty tags -->
+<div id="empty-tags">
+  <p></p>
+  <div></div>
+  <span></span>
+  <a href=""></a>
+</div>
+
+<!-- 16: Void elements with closing tags (invalid but common) -->
+<div id="void-closes">
+  <br></br>
+  <hr></hr>
+  <img src="x.png" alt=""></img>
+  <input type="text"></input>
+</div>
+
+<!-- 17: Comment edge cases -->
+<!-- -->
+<!-- - -->
+<!-- -- -->
+<!----->
+<!-- Comment with -- double dash inside -->
+
+<!-- 18: Doctype in wrong position -->
+<div id="late-doctype">
+  <!DOCTYPE html>
+  <p>Doctype appearing mid-document</p>
+</div>
+
+<!-- 19: Frameset (obsolete) -->
+<!-- intentionally omitted as it changes parsing mode -->
+
+<!-- 20: Extremely long attribute value -->
+<div id="long-attr" data-value="AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA">
+  Long attribute value
+</div>
+
+</body>
+</html>

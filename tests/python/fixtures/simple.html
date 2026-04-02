@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Simple Test Document</title>
+  <link rel="stylesheet" href="style.css">
+  <link rel="alternate" type="application/rss+xml" href="/feed.xml">
+</head>
+<body>
+  <header id="site-header" class="header primary-header">
+    <nav class="nav main-nav" role="navigation" aria-label="Main">
+      <ul class="nav-list">
+        <li class="nav-item active"><a href="/" class="nav-link" data-page="home">Home</a></li>
+        <li class="nav-item"><a href="/about" class="nav-link" data-page="about">About</a></li>
+        <li class="nav-item"><a href="/blog" class="nav-link" data-page="blog">Blog</a></li>
+        <li class="nav-item"><a href="/contact" class="nav-link" data-page="contact">Contact</a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <main id="main-content" class="main" role="main">
+    <article id="article-1" class="article featured" data-category="tech">
+      <header class="article-header">
+        <h1 class="article-title">Hello, World!</h1>
+        <p class="article-meta">
+          Published by <a href="/author/jane" class="author-link" rel="author">Jane Doe</a>
+          on <time datetime="2024-01-15">January 15, 2024</time>
+        </p>
+      </header>
+
+      <div class="article-body">
+        <p id="para-1" class="paragraph intro">This is the first paragraph with <strong>bold text</strong> and <em>italic text</em>.</p>
+        <p id="para-2" class="paragraph">This is the second paragraph with a <a href="https://example.com" class="external-link" target="_blank" rel="noopener noreferrer">link to example.com</a>.</p>
+        <p id="para-3" class="paragraph">Third paragraph with <code>inline code</code> and a <span class="highlight">highlighted span</span>.</p>
+
+        <h2 class="section-title">Section One</h2>
+        <ul class="list unordered-list" id="list-1">
+          <li class="list-item" data-index="0">Item one with <a href="#anchor">anchor link</a></li>
+          <li class="list-item" data-index="1">Item two</li>
+          <li class="list-item" data-index="2">Item three</li>
+        </ul>
+
+        <h2 class="section-title">Section Two</h2>
+        <ol class="list ordered-list" id="list-2">
+          <li class="list-item" value="1">First ordered item</li>
+          <li class="list-item" value="2">Second ordered item</li>
+          <li class="list-item" value="3">Third ordered item</li>
+        </ol>
+
+        <h3 class="subsection-title">Code Example</h3>
+        <pre class="code-block"><code class="language-python">def hello():
+    print("Hello, world!")
+    return 42</code></pre>
+
+        <blockquote class="quote" cite="https://example.com">
+          <p>This is a blockquote with a citation.</p>
+          <footer>— <cite>Someone Famous</cite></footer>
+        </blockquote>
+
+        <table class="data-table" id="table-1">
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Value</th>
+              <th scope="col">Description</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="row-even" data-row="0">
+              <td class="cell name-cell">Alpha</td>
+              <td class="cell value-cell">1</td>
+              <td class="cell desc-cell">First entry</td>
+            </tr>
+            <tr class="row-odd" data-row="1">
+              <td class="cell name-cell">Beta</td>
+              <td class="cell value-cell">2</td>
+              <td class="cell desc-cell">Second entry</td>
+            </tr>
+            <tr class="row-even" data-row="2">
+              <td class="cell name-cell">Gamma</td>
+              <td class="cell value-cell">3</td>
+              <td class="cell desc-cell">Third entry</td>
+            </tr>
+          </tbody>
+          <tfoot>
+            <tr>
+              <td colspan="3" class="table-footer">End of table</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        <form id="contact-form" class="form" method="post" action="/submit">
+          <div class="form-group">
+            <label for="name-input" class="form-label">Name</label>
+            <input type="text" id="name-input" name="name" class="form-input" placeholder="Enter your name" required>
+          </div>
+          <div class="form-group">
+            <label for="email-input" class="form-label">Email</label>
+            <input type="email" id="email-input" name="email" class="form-input" placeholder="you@example.com" required>
+          </div>
+          <div class="form-group">
+            <label for="message-textarea" class="form-label">Message</label>
+            <textarea id="message-textarea" name="message" class="form-textarea" rows="5" cols="40"></textarea>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Options</label>
+            <select id="options-select" name="options" class="form-select">
+              <option value="" disabled selected>Choose one</option>
+              <option value="a">Option A</option>
+              <option value="b">Option B</option>
+              <option value="c">Option C</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary" id="submit-btn">Submit</button>
+          <button type="reset" class="btn btn-secondary">Reset</button>
+        </form>
+      </div>
+
+      <footer class="article-footer">
+        <div class="tags">
+          <a href="/tag/python" class="tag" rel="tag">python</a>
+          <a href="/tag/rust" class="tag" rel="tag">rust</a>
+          <a href="/tag/parsing" class="tag" rel="tag">parsing</a>
+        </div>
+      </footer>
+    </article>
+
+    <aside id="sidebar" class="sidebar" role="complementary">
+      <div class="widget" id="widget-recent">
+        <h3 class="widget-title">Recent Posts</h3>
+        <ul class="widget-list">
+          <li><a href="/post/1">Post One</a></li>
+          <li><a href="/post/2">Post Two</a></li>
+          <li><a href="/post/3">Post Three</a></li>
+        </ul>
+      </div>
+      <div class="widget" id="widget-categories">
+        <h3 class="widget-title">Categories</h3>
+        <ul class="widget-list">
+          <li><a href="/cat/tech" data-count="5">Tech (5)</a></li>
+          <li><a href="/cat/science" data-count="3">Science (3)</a></li>
+        </ul>
+      </div>
+    </aside>
+  </main>
+
+  <footer id="site-footer" class="footer">
+    <p class="copyright">&copy; 2024 Example Site. All rights reserved.</p>
+    <p>Contact: <a href="mailto:info@example.com">info@example.com</a></p>
+    <!-- This is an HTML comment -->
+  </footer>
+
+  <script>
+    // Inline script — should be treated as raw text, not parsed as HTML
+    var config = {"key": "value", "items": [1, 2, 3]};
+    if (x < 10 && y > 5) { console.log("test"); }
+  </script>
+  <noscript>
+    <p>Please enable JavaScript to view this site properly.</p>
+  </noscript>
+</body>
+</html>

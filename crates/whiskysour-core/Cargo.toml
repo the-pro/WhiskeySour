@@ -1,0 +1,44 @@
+[package]
+name        = "whiskysour-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# HTML5 spec-compliant parser
+html5ever    = "0.27"
+markup5ever  = "0.12"
+
+# XML parser
+xml5ever     = "0.18"
+
+# Compact attribute storage (avoids heap alloc for ≤4 attrs)
+smallvec     = { version = "1.13", features = ["union"] }
+
+# SIMD-accelerated byte search
+memchr       = "2.7"
+
+# LRU cache for compiled selectors
+lru          = "0.12"
+
+# CSS selector tokenising
+cssparser    = "0.34"
+
+# Parallel tree traversal
+rayon        = "1.10"
+
+# Thin string that can borrow from the input buffer
+tendril      = "0.4"
+
+# Atom / interned string (re-exported from html5ever)
+string_cache = "0.8"
+
+[dev-dependencies]
+criterion    = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name    = "parse"
+harness = false
+
+[[bench]]
+name    = "find"
+harness = false
