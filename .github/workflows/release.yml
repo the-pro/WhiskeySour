@@ -131,10 +131,14 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest,  python: '3.9'
-          - os: ubuntu-latest,  python: '3.13'
-          - os: macos-latest,   python: '3.13'
-          - os: windows-latest, python: '3.13'
+          - os: ubuntu-latest
+            python: '3.9'
+          - os: ubuntu-latest
+            python: '3.13'
+          - os: macos-latest
+            python: '3.13'
+          - os: windows-latest
+            python: '3.13'
     steps:
       - uses: actions/checkout@v4
 
