@@ -180,7 +180,7 @@ impl PyTag {
 
     #[getter]
     fn attrs(&self, py: Python) -> PyObject {
-        let d = PyDict::new(py);
+        let d = PyDict::new_bound(py);
         self.read_doc(|doc| {
             if let Some(attrs) = doc.get(self.id).data.attrs() {
                 for a in attrs.iter() {
