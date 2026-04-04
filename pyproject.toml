@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name            = "whiskeysour"
-version         = "0.1.2"
+version         = "0.1.3"
 description     = "High-performance BeautifulSoup replacement written in Rust"
 readme          = "README.md"
 license         = { text = "MIT" }
