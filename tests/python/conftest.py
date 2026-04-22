@@ -52,11 +52,13 @@ def ws():
 @pytest.fixture
 def parse(ws):
     """
-    Factory fixture: parse(html, features="html.parser") → Document.
-    Mirrors the BeautifulSoup(html, features) constructor signature.
+    Factory fixture: parse(html) → Document.
+    Mirrors the BeautifulSoup(html) constructor signature.
     """
-    def _parse(markup: str | bytes, features: str = "html.parser", **kwargs):
-        return ws.WhiskeySour(markup, features, **kwargs)
+    def _parse(markup: str | bytes, features: str = None, **kwargs):
+        if features is not None:
+            return ws.WhiskeySour(markup, features, **kwargs)
+        return ws.WhiskeySour(markup, **kwargs)
     return _parse
 
 

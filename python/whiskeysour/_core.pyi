@@ -96,7 +96,7 @@ class _Tag:
 
 
 class _Document:
-    def __init__(self, markup: str, features: str, from_encoding: str) -> None: ...
+    def __init__(self, markup: str, features: Optional[str] = None, from_encoding: Optional[str] = None) -> None: ...
 
     # Document elements
     @property

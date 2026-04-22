@@ -551,7 +551,7 @@ soup = BeautifulSoup(html, "html.parser")</code></pre>
   <p>html5ever also handles malformed HTML correctly by following the HTML5 error-recovery specification. This means WhiskeySour handles unclosed tags, mismatched nesting, and invalid attributes the same way every major browser does — not in an ad-hoc way.</p>
 
   <pre><code># html5ever produces the same tree a browser would build:
-soup = WhiskeySour("&lt;p&gt;text&lt;b&gt;bold&lt;/p&gt;", "html.parser")
+soup = WhiskeySour("&lt;p&gt;text&lt;b&gt;bold&lt;/p&gt;")
 # → &lt;html&gt;&lt;body&gt;&lt;p&gt;text&lt;b&gt;bold&lt;/b&gt;&lt;/b&gt;&lt;/p&gt;&lt;/body&gt;&lt;/html&gt;
 # Correct per HTML5 spec — implicit &lt;/b&gt; before &lt;/p&gt;</code></pre>
 </section>

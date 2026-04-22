@@ -131,19 +131,22 @@ These are non-negotiable. A >5% regression against the baseline blocks merge.
 
 ---
 
-## PyO3 patterns (version 0.22)
+## PyO3 patterns (version 0.28)
 
-Use these exact patterns. The old `&PyAny` / `PyBytes::new` API is removed.
+Use these exact patterns. The `_bound` suffix and `PyObject` type are removed in 0.28.
 
 ```rust
-// ✓ Correct
-fn my_method<'py>(&self, py: Python<'py>, arg: &Bound<'py, PyAny>) -> PyResult<PyObject> { ... }
-PyBytes::new_bound(py, &bytes)
-PyList::new_bound(py, &items)
-
-// ✗ Wrong (pre-0.22 API — will not compile)
-fn my_method(&self, py: Python, arg: &PyAny) -> PyResult<PyObject> { ... }
+// ✓ Correct (PyO3 0.28)
+fn my_method<'py>(&self, py: Python<'py>, arg: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>> { ... }
 PyBytes::new(py, &bytes)
+PyList::new(py, &items)
+PyDict::new(py)
+value.into_pyobject(py).unwrap().into_any().unbind()  // to get Py<PyAny>
+
+// ✗ Wrong (pre-0.28 API — will not compile)
+fn my_method(&self, py: Python, arg: &PyAny) -> PyResult<PyObject> { ... }
+PyBytes::new_bound(py, &bytes)   // removed in 0.25+
+value.into_py(py)                // removed in 0.25+
 ```
 
 `#[pymodule]` signature:

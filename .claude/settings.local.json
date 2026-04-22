@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -m venv /tmp/ws_v012_test)",
+      "Bash(/tmp/ws_v012_test/bin/pip install:*)"
+    ]
+  }
+}

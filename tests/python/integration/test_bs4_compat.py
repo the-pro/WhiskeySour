@@ -78,17 +78,17 @@ def bs4_soup():
 
 class TestConstructor:
     def test_whiskeysour_callable(self, ws):
-        soup = ws.WhiskeySour(COMPAT_HTML, "html.parser")
+        soup = ws.WhiskeySour(COMPAT_HTML)
         assert soup is not None
 
     def test_beautifulsoup_alias(self, ws):
         """ws.BeautifulSoup must be an alias for ws.WhiskeySour."""
         assert hasattr(ws, "BeautifulSoup")
-        soup = ws.BeautifulSoup(COMPAT_HTML, "html.parser")
+        soup = ws.BeautifulSoup(COMPAT_HTML)
         assert soup is not None
 
     def test_constructor_bytes_input(self, ws):
-        soup = ws.WhiskeySour(COMPAT_HTML.encode("utf-8"), "html.parser")
+        soup = ws.WhiskeySour(COMPAT_HTML.encode("utf-8"))
         assert soup.find("h1") is not None
 
     def test_constructor_from_encoding_kwarg(self, ws):

@@ -44,8 +44,8 @@ Key implementation choices:
 ```python
 from whiskeysour import WhiskeySour
 
-# Same as BeautifulSoup(html, "html.parser")
-soup = WhiskeySour(html, "html.parser")
+# Drop-in replacement for BeautifulSoup — no parser argument needed
+soup = WhiskeySour(html)
 
 # All standard bs4 operations work identically:
 soup.find("h1")

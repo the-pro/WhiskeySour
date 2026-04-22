@@ -13,6 +13,7 @@ use markup5ever::{namespace_url, LocalName, Namespace, QualName};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyList};
+use pyo3::IntoPyObject;
 use smallvec::SmallVec;
 
 use whiskysour_core::{
@@ -179,33 +180,33 @@ impl PyTag {
     }
 
     #[getter]
-    fn attrs(&self, py: Python) -> PyObject {
-        let d = PyDict::new_bound(py);
+    fn attrs(&self, py: Python) -> Py<PyAny> {
+        let d = PyDict::new(py);
         self.read_doc(|doc| {
             if let Some(attrs) = doc.get(self.id).data.attrs() {
                 for a in attrs.iter() {
                     let local = a.local_name();
                     // `class` and `rel` → list; everything else → str.
-                    let val: PyObject = if local == "class" || local == "rel"
+                    let val: Py<PyAny> = if local == "class" || local == "rel"
                         || local == "rev" || local == "accept-charset"
                         || local == "headers" || local == "accesskey"
                     {
                         let tokens: Vec<&str> = a.value.split_ascii_whitespace().collect();
-                        PyList::new_bound(py, &tokens).into()
+                        PyList::new(py, &tokens).unwrap().into_any().unbind()
                     } else {
-                        a.value.clone().into_py(py)
+                        a.value.clone().into_pyobject(py).unwrap().into_any().unbind()
                     };
                     d.set_item(local, val).ok();
                 }
             }
         });
-        d.into()
+        d.into_any().unbind()
     }
 
-    fn get(&self, py: Python, key: &str, default: Option<PyObject>) -> PyObject {
+    fn get(&self, py: Python, key: &str, default: Option<Py<PyAny>>) -> Py<PyAny> {
         let val = self.read_doc(|doc| doc.get_attr(self.id, key).map(|v| v.to_owned()));
         match val {
-            Some(v) => v.into_py(py),
+            Some(v) => v.into_pyobject(py).unwrap().into_any().unbind(),
             None => default.unwrap_or_else(|| py.None()),
         }
     }
@@ -213,7 +214,7 @@ impl PyTag {
     /// Single-key lookup with multi-value coercion (class/rel/etc. → list).
     /// Returns None if the attribute is absent. Much cheaper than building
     /// the full `attrs` dict when only one value is needed.
-    fn get_coerced(&self, py: Python, key: &str) -> Option<PyObject> {
+    fn get_coerced(&self, py: Python, key: &str) -> Option<Py<PyAny>> {
         const MULTI: &[&str] = &[
             "class", "rel", "rev", "accept-charset", "headers", "accesskey",
         ];
@@ -224,9 +225,9 @@ impl PyTag {
                 if a.local_name() == key {
                     return Some(if is_multi {
                         let tokens: Vec<&str> = a.value.split_ascii_whitespace().collect();
-                        PyList::new_bound(py, &tokens).into()
+                        PyList::new(py, &tokens).unwrap().into_any().unbind()
                     } else {
-                        a.value.clone().into_py(py)
+                        a.value.clone().into_pyobject(py).unwrap().into_any().unbind()
                     });
                 }
             }
@@ -238,10 +239,10 @@ impl PyTag {
         self.read_doc(|doc| doc.get_attr(self.id, key).is_some())
     }
 
-    fn __getitem__(&self, py: Python, key: &str) -> PyResult<PyObject> {
+    fn __getitem__(&self, py: Python, key: &str) -> PyResult<Py<PyAny>> {
         let val = self.read_doc(|doc| doc.get_attr(self.id, key).map(|v| v.to_owned()));
         match val {
-            Some(v) => Ok(v.into_py(py)),
+            Some(v) => Ok(v.into_pyobject(py).unwrap().into_any().unbind()),
             None => Err(PyKeyError::new_err(key.to_owned())),
         }
     }
@@ -312,19 +313,19 @@ impl PyTag {
 
     /// `.strings` — iterator over all text descendants (as Python list).
     #[getter]
-    fn strings(&self, py: Python) -> PyObject {
+    fn strings(&self, py: Python) -> Py<PyAny> {
         let v: Vec<String> = self.read_doc(|doc| {
             let mut out = Vec::new();
             collect_strings(doc, self.id, &mut out);
             out
         });
-        v.into_py(py)
+        v.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     /// `.stripped_strings` — text descendants with leading/trailing whitespace stripped
     /// and empty strings removed.
     #[getter]
-    fn stripped_strings(&self, py: Python) -> PyObject {
+    fn stripped_strings(&self, py: Python) -> Py<PyAny> {
         let v: Vec<String> = self.read_doc(|doc| {
             let mut out = Vec::new();
             collect_strings(doc, self.id, &mut out);
@@ -333,7 +334,7 @@ impl PyTag {
                 .filter(|s| !s.is_empty())
                 .collect()
         });
-        v.into_py(py)
+        v.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     /// `.get_text(separator="", strip=False)`
@@ -387,34 +388,34 @@ impl PyTag {
 
     /// `.parents` — list of all ancestors including the Document.
     #[getter]
-    fn parents(&self, py: Python) -> PyObject {
+    fn parents(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.read_doc(|doc| {
             AncestorsIter::new(doc, self.id).collect()
         });
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     /// `.contents` — list of all direct children (tags + text nodes).
     #[getter]
-    fn contents(&self, py: Python) -> PyObject {
+    fn contents(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.read_doc(|doc| doc.children_ids(self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     /// `.children` — same as `.contents` but returned as a Python list (generator in bs4).
     #[getter]
-    fn children(&self, py: Python) -> PyObject {
+    fn children(&self, py: Python) -> Py<PyAny> {
         self.contents(py)
     }
 
     /// `.descendants` — all descendants in pre-order.
     #[getter]
-    fn descendants(&self, py: Python) -> PyObject {
+    fn descendants(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.read_doc(|doc| DescendantsPreOrder::new(doc, self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     #[getter]
@@ -428,17 +429,17 @@ impl PyTag {
     }
 
     #[getter]
-    fn next_siblings(&self, py: Python) -> PyObject {
+    fn next_siblings(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.read_doc(|doc| NextSiblingsIter::new(doc, self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     #[getter]
-    fn previous_siblings(&self, py: Python) -> PyObject {
+    fn previous_siblings(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.read_doc(|doc| PrevSiblingsIter::new(doc, self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     #[getter]
@@ -757,11 +758,11 @@ impl PyTag {
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> PyResult<Bound<'py, PyBytes>> {
         let s = self.__str__();
-        Ok(PyBytes::new_bound(py, s.as_bytes()))
+        Ok(PyBytes::new(py, s.as_bytes()))
     }
 
     fn encode_contents<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
-        PyBytes::new_bound(py, self.decode_contents().as_bytes())
+        PyBytes::new(py, self.decode_contents().as_bytes())
     }
 
     // ── Equality / hash ───────────────────────────────────────────────────────
@@ -836,9 +837,9 @@ impl PyDocument {
 #[pymethods]
 impl PyDocument {
     #[new]
-    #[pyo3(signature = (markup, features="html.parser", from_encoding=None))]
-    fn new(markup: Bound<'_, PyAny>, features: &str, from_encoding: Option<&str>) -> PyResult<Self> {
-        let _ = features; // used by Python shim; we always use html5ever
+    #[pyo3(signature = (markup, features=None, from_encoding=None))]
+    fn new(markup: Bound<'_, PyAny>, features: Option<&str>, from_encoding: Option<&str>) -> PyResult<Self> {
+        let _ = features; // accepted for BS4 compat; we always use html5ever
         let opts = ParseOptions { from_encoding: from_encoding.map(|s| s.to_owned()) };
         let doc = if let Ok(s) = markup.extract::<String>() {
             parse_html(&s, opts)
@@ -937,7 +938,7 @@ impl PyDocument {
     // ── Tree access (doc acts as a tag for navigation purposes) ───────────────
 
     #[getter]
-    fn contents(&self, py: Python) -> PyObject {
+    fn contents(&self, py: Python) -> Py<PyAny> {
         self.root_tag().contents(py)
     }
 
@@ -948,12 +949,12 @@ impl PyDocument {
 
     /// All descendants of the document (all nodes including text/comment).
     #[getter]
-    fn descendants(&self, py: Python) -> PyObject {
+    fn descendants(&self, py: Python) -> Py<PyAny> {
         let ids: Vec<NodeId> = self.doc.read()
             .map(|doc| DescendantsPreOrder::new(&doc, DOCUMENT_ID).collect())
             .unwrap_or_default();
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.tag(i)).collect();
-        tags.into_py(py)
+        tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     // ── new_tag / new_string ──────────────────────────────────────────────────
@@ -1013,7 +1014,7 @@ impl PyDocument {
 
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
-        PyBytes::new_bound(py, self.__str__().as_bytes())
+        PyBytes::new(py, self.__str__().as_bytes())
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────

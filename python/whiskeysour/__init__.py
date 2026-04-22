@@ -735,7 +735,7 @@ class WhiskeySour:
     Usage::
 
         from whiskeysour import WhiskeySour
-        soup = WhiskeySour("<html><body><p>Hello</p></body></html>", "html.parser")
+        soup = WhiskeySour("<html><body><p>Hello</p></body></html>")
         print(soup.find("p").get_text())
     """
 
@@ -770,8 +770,7 @@ class WhiskeySour:
 
         self._rust = _RustDocument(
             markup_str,
-            features or "html.parser",
-            from_encoding or "",
+            from_encoding=from_encoding or "",
         )
 
     # ── Document-level accessors ──────────────────────────────────────────────
@@ -1021,7 +1020,7 @@ class StreamParser:
 
     def close(self) -> "WhiskeySour":
         """Finalise the parse, fire ``on_complete``, and return the document."""
-        soup = WhiskeySour(bytes(self._buf), "html.parser")
+        soup = WhiskeySour(bytes(self._buf))
         if self._on_complete is not None:
             self._on_complete(soup)
         return soup
@@ -1067,7 +1066,7 @@ def parse_stream(
             chunk = chunk.encode("utf-8")
         buf.extend(chunk)
 
-    soup = WhiskeySour(bytes(buf), "html.parser")
+    soup = WhiskeySour(bytes(buf))
 
     if selector:
         results = soup.select(selector)
