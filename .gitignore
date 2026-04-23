@@ -54,3 +54,6 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+
+# ── Documentation build artefacts ─────────────────────────────────────────────
+docs/
