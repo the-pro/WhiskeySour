@@ -1,2 +1,4 @@
 mod find;
-pub use find::{FindOptions, NameFilter, AttrFilter, AttrValueFilter, find_one, find_all, select, select_one};
+pub use find::{
+    find_all, find_one, select, select_one, AttrFilter, AttrValueFilter, FindOptions, NameFilter,
+};

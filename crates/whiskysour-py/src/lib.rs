@@ -55,7 +55,7 @@ type DocHandle = Arc<RwLock<Document>>;
 ///   tag.select_one(css)→ _Tag | None
 ///   str(tag)          → outer HTML
 ///   tag.prettify()    → indented HTML
-#[pyclass(name = "_Tag")]
+#[pyclass(name = "_Tag", from_py_object)]
 #[derive(Clone)]
 pub struct PyTag {
     doc: DocHandle,
@@ -68,11 +68,10 @@ impl PyTag {
     }
 
     fn wrap_id(&self, id: NodeId) -> PyTag {
-        PyTag { doc: Arc::clone(&self.doc), id }
-    }
-
-    fn wrap_opt(&self, id: Option<NodeId>) -> Option<PyTag> {
-        id.map(|i| self.wrap_id(i))
+        PyTag {
+            doc: Arc::clone(&self.doc),
+            id,
+        }
     }
 
     // Build FindOptions from Python keyword arguments.
@@ -85,9 +84,12 @@ impl PyTag {
         string_arg: Option<&str>,
         kwargs: Option<&Bound<'_, PyDict>>,
     ) -> PyResult<FindOptions> {
-        let mut opts = FindOptions::default();
-        opts.recursive = !recursive; // NOTE: our flag is inverted (true = non-recursive)
-        opts.limit = limit;
+        // NOTE: our `recursive` flag is inverted (true = non-recursive).
+        let mut opts = FindOptions {
+            recursive: !recursive,
+            limit,
+            ..Default::default()
+        };
 
         // Name filter
         if let Some(name) = name_arg {
@@ -95,12 +97,14 @@ impl PyTag {
                 // No filter
             } else if name.is_instance_of::<PyBool>() {
                 let b: bool = name.extract()?;
-                if b { opts.name = Some(NameFilter::Any); }
+                if b {
+                    opts.name = Some(NameFilter::Any);
+                }
             } else if let Ok(s) = name.extract::<String>() {
                 opts.name = Some(NameFilter::Exact(s.to_ascii_lowercase()));
             } else if let Ok(lst) = name.extract::<Vec<String>>() {
                 opts.name = Some(NameFilter::AnyOf(
-                    lst.into_iter().map(|s| s.to_ascii_lowercase()).collect()
+                    lst.into_iter().map(|s| s.to_ascii_lowercase()).collect(),
                 ));
             } else {
                 // True / other truthy — match any element
@@ -126,10 +130,18 @@ impl PyTag {
         Ok(opts)
     }
 
-    fn extend_attr_filters(&self, filters: &mut Vec<AttrFilter>, d: &Bound<'_, PyDict>) -> PyResult<()> {
+    fn extend_attr_filters(
+        &self,
+        filters: &mut Vec<AttrFilter>,
+        d: &Bound<'_, PyDict>,
+    ) -> PyResult<()> {
         for (k, v) in d.iter() {
             let name: String = k.extract()?;
-            let name = if name == "class_" { "class".to_owned() } else { name };
+            let name = if name == "class_" {
+                "class".to_owned()
+            } else {
+                name
+            };
             let vf = pyobj_to_attr_value(&v, &name)?;
             filters.push(AttrFilter { name, value: vf });
         }
@@ -137,14 +149,16 @@ impl PyTag {
     }
 
     fn read_doc<F, R>(&self, f: F) -> R
-    where F: FnOnce(&Document) -> R
+    where
+        F: FnOnce(&Document) -> R,
     {
         let doc = self.doc.read().expect("document lock poisoned");
         f(&doc)
     }
 
     fn write_doc<F, R>(&self, f: F) -> R
-    where F: FnOnce(&mut Document) -> R
+    where
+        F: FnOnce(&mut Document) -> R,
     {
         let mut doc = self.doc.write().expect("document lock poisoned");
         f(&mut doc)
@@ -156,7 +170,12 @@ fn pyobj_to_attr_value(v: &Bound<'_, PyAny>, attr_name: &str) -> PyResult<AttrVa
         return Ok(AttrValueFilter::Present);
     }
     if let Ok(b) = v.extract::<bool>() {
-        return Ok(if b { AttrValueFilter::Present } else { AttrValueFilter::Present });
+        // bs4 semantics: attr=True → must be present, attr=False → must be absent.
+        return Ok(if b {
+            AttrValueFilter::Present
+        } else {
+            AttrValueFilter::Absent
+        });
     }
     if let Ok(s) = v.extract::<String>() {
         // For `class`, use token-contains semantics.
@@ -187,14 +206,22 @@ impl PyTag {
                 for a in attrs.iter() {
                     let local = a.local_name();
                     // `class` and `rel` → list; everything else → str.
-                    let val: Py<PyAny> = if local == "class" || local == "rel"
-                        || local == "rev" || local == "accept-charset"
-                        || local == "headers" || local == "accesskey"
+                    let val: Py<PyAny> = if local == "class"
+                        || local == "rel"
+                        || local == "rev"
+                        || local == "accept-charset"
+                        || local == "headers"
+                        || local == "accesskey"
                     {
                         let tokens: Vec<&str> = a.value.split_ascii_whitespace().collect();
                         PyList::new(py, &tokens).unwrap().into_any().unbind()
                     } else {
-                        a.value.clone().into_pyobject(py).unwrap().into_any().unbind()
+                        a.value
+                            .clone()
+                            .into_pyobject(py)
+                            .unwrap()
+                            .into_any()
+                            .unbind()
                     };
                     d.set_item(local, val).ok();
                 }
@@ -216,7 +243,12 @@ impl PyTag {
     /// the full `attrs` dict when only one value is needed.
     fn get_coerced(&self, py: Python, key: &str) -> Option<Py<PyAny>> {
         const MULTI: &[&str] = &[
-            "class", "rel", "rev", "accept-charset", "headers", "accesskey",
+            "class",
+            "rel",
+            "rev",
+            "accept-charset",
+            "headers",
+            "accesskey",
         ];
         let is_multi = MULTI.contains(&key);
         self.read_doc(|doc| {
@@ -227,7 +259,12 @@ impl PyTag {
                         let tokens: Vec<&str> = a.value.split_ascii_whitespace().collect();
                         PyList::new(py, &tokens).unwrap().into_any().unbind()
                     } else {
-                        a.value.clone().into_pyobject(py).unwrap().into_any().unbind()
+                        a.value
+                            .clone()
+                            .into_pyobject(py)
+                            .unwrap()
+                            .into_any()
+                            .unbind()
                     });
                 }
             }
@@ -272,8 +309,13 @@ impl PyTag {
         self.read_doc(|doc| {
             let mut text_nodes: Vec<NodeId> = Vec::new();
             collect_string_nodes(doc, self.id, &mut text_nodes);
-            if text_nodes.len() == 1 { Some(text_nodes[0]) } else { None }
-        }).map(|id| self.wrap_id(id))
+            if text_nodes.len() == 1 {
+                Some(text_nodes[0])
+            } else {
+                None
+            }
+        })
+        .map(|id| self.wrap_id(id))
     }
 
     /// All descendant text node _Tags (for NavigableString iteration with parent support).
@@ -383,15 +425,14 @@ impl PyTag {
     #[getter]
     fn parent(&self) -> Option<PyTag> {
         // Return ALL parents including Document node, so Python can wrap it as [document]
-        self.read_doc(|doc| doc.get(self.id).parent).map(|p| self.wrap_id(p))
+        self.read_doc(|doc| doc.get(self.id).parent)
+            .map(|p| self.wrap_id(p))
     }
 
     /// `.parents` — list of all ancestors including the Document.
     #[getter]
     fn parents(&self, py: Python) -> Py<PyAny> {
-        let ids: Vec<NodeId> = self.read_doc(|doc| {
-            AncestorsIter::new(doc, self.id).collect()
-        });
+        let ids: Vec<NodeId> = self.read_doc(|doc| AncestorsIter::new(doc, self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
         tags.into_pyobject(py).unwrap().into_any().unbind()
     }
@@ -413,19 +454,22 @@ impl PyTag {
     /// `.descendants` — all descendants in pre-order.
     #[getter]
     fn descendants(&self, py: Python) -> Py<PyAny> {
-        let ids: Vec<NodeId> = self.read_doc(|doc| DescendantsPreOrder::new(doc, self.id).collect());
+        let ids: Vec<NodeId> =
+            self.read_doc(|doc| DescendantsPreOrder::new(doc, self.id).collect());
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.wrap_id(i)).collect();
         tags.into_pyobject(py).unwrap().into_any().unbind()
     }
 
     #[getter]
     fn next_sibling(&self) -> Option<PyTag> {
-        self.read_doc(|doc| doc.get(self.id).next_sibling).map(|i| self.wrap_id(i))
+        self.read_doc(|doc| doc.get(self.id).next_sibling)
+            .map(|i| self.wrap_id(i))
     }
 
     #[getter]
     fn previous_sibling(&self) -> Option<PyTag> {
-        self.read_doc(|doc| doc.get(self.id).prev_sibling).map(|i| self.wrap_id(i))
+        self.read_doc(|doc| doc.get(self.id).prev_sibling)
+            .map(|i| self.wrap_id(i))
     }
 
     #[getter]
@@ -446,7 +490,8 @@ impl PyTag {
     fn next_element(&self) -> Option<PyTag> {
         self.read_doc(|doc| {
             // DFS: first child, else next sibling, else ancestor's next sibling.
-            doc.get(self.id).first_child
+            doc.get(self.id)
+                .first_child
                 .or_else(|| doc.get(self.id).next_sibling)
                 .or_else(|| {
                     let mut cur = self.id;
@@ -460,7 +505,8 @@ impl PyTag {
                         }
                     }
                 })
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     #[getter]
@@ -471,17 +517,15 @@ impl PyTag {
                 Some(prev) => {
                     // Walk to deepest last-child of prev.
                     let mut cur = prev;
-                    loop {
-                        match doc.get(cur).last_child {
-                            Some(lc) => cur = lc,
-                            None => break,
-                        }
+                    while let Some(lc) = doc.get(cur).last_child {
+                        cur = lc;
                     }
                     Some(cur)
                 }
                 None => doc.get(self.id).parent,
             }
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     // ── find / find_all ───────────────────────────────────────────────────────
@@ -495,7 +539,14 @@ impl PyTag {
         string: Option<&str>,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Option<PyTag>> {
-        let opts = self.build_find_opts(name.as_ref(), attrs.as_ref(), recursive, 1, string, kwargs.as_ref())?;
+        let opts = self.build_find_opts(
+            name.as_ref(),
+            attrs.as_ref(),
+            recursive,
+            1,
+            string,
+            kwargs.as_ref(),
+        )?;
         let result = self.read_doc(|doc| find_one(doc, self.id, &opts));
         Ok(result.map(|i| self.wrap_id(i)))
     }
@@ -510,7 +561,14 @@ impl PyTag {
         limit: usize,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<PyTag>> {
-        let mut opts = self.build_find_opts(name.as_ref(), attrs.as_ref(), recursive, limit, string, kwargs.as_ref())?;
+        let mut opts = self.build_find_opts(
+            name.as_ref(),
+            attrs.as_ref(),
+            recursive,
+            limit,
+            string,
+            kwargs.as_ref(),
+        )?;
         opts.limit = limit;
         let ids = self.read_doc(|doc| find_all(doc, self.id, &opts));
         Ok(ids.into_iter().map(|i| self.wrap_id(i)).collect())
@@ -533,14 +591,16 @@ impl PyTag {
     // ── CSS selectors ─────────────────────────────────────────────────────────
 
     fn select(&self, css: &str) -> PyResult<Vec<PyTag>> {
-        let ids = self.read_doc(|doc| select(doc, self.id, css))
-            .map_err(|e| PyValueError::new_err(e))?;
+        let ids = self
+            .read_doc(|doc| select(doc, self.id, css))
+            .map_err(PyValueError::new_err)?;
         Ok(ids.into_iter().map(|i| self.wrap_id(i)).collect())
     }
 
     fn select_one(&self, css: &str) -> PyResult<Option<PyTag>> {
-        let id = self.read_doc(|doc| select_one(doc, self.id, css))
-            .map_err(|e| PyValueError::new_err(e))?;
+        let id = self
+            .read_doc(|doc| select_one(doc, self.id, css))
+            .map_err(PyValueError::new_err)?;
         Ok(id.map(|i| self.wrap_id(i)))
     }
 
@@ -550,23 +610,34 @@ impl PyTag {
     fn find_next(&self, name: Option<&str>, string: Option<&str>) -> Option<PyTag> {
         self.read_doc(|doc| {
             NextElementsIter::new(doc, self.id).find(|&id| {
-                if let Some(n) = name {
-                    doc.get(id).tag_name() == Some(n)
-                } else {
-                    doc.get(id).data.is_element()
+                if !doc.get(id).data.is_element() {
+                    return false;
                 }
+                if let Some(n) = name {
+                    if doc.get(id).tag_name() != Some(n) {
+                        return false;
+                    }
+                }
+                if let Some(s) = string {
+                    if doc.get_text(id).trim() != s {
+                        return false;
+                    }
+                }
+                true
             })
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     #[pyo3(signature = (name=None))]
     fn find_next_sibling(&self, name: Option<&str>) -> Option<PyTag> {
         self.read_doc(|doc| {
             NextSiblingsIter::new(doc, self.id).find(|&id| {
-                doc.get(id).data.is_element() &&
-                name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                doc.get(id).data.is_element()
+                    && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
             })
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     #[pyo3(signature = (name=None))]
@@ -574,8 +645,8 @@ impl PyTag {
         let ids = self.read_doc(|doc| {
             NextSiblingsIter::new(doc, self.id)
                 .filter(|&id| {
-                    doc.get(id).data.is_element() &&
-                    name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                    doc.get(id).data.is_element()
+                        && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
                 })
                 .collect::<Vec<_>>()
         });
@@ -586,10 +657,11 @@ impl PyTag {
     fn find_previous_sibling(&self, name: Option<&str>) -> Option<PyTag> {
         self.read_doc(|doc| {
             PrevSiblingsIter::new(doc, self.id).find(|&id| {
-                doc.get(id).data.is_element() &&
-                name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                doc.get(id).data.is_element()
+                    && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
             })
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     #[pyo3(signature = (name=None))]
@@ -597,8 +669,8 @@ impl PyTag {
         let ids = self.read_doc(|doc| {
             PrevSiblingsIter::new(doc, self.id)
                 .filter(|&id| {
-                    doc.get(id).data.is_element() &&
-                    name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                    doc.get(id).data.is_element()
+                        && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
                 })
                 .collect::<Vec<_>>()
         });
@@ -611,10 +683,11 @@ impl PyTag {
             AncestorsIter::new(doc, self.id)
                 .take_while(|&p| !matches!(doc.get(p).data, NodeData::Document))
                 .find(|&p| {
-                    doc.get(p).data.is_element() &&
-                    name.map_or(true, |n| doc.get(p).tag_name() == Some(n))
+                    doc.get(p).data.is_element()
+                        && name.is_none_or(|n| doc.get(p).tag_name() == Some(n))
                 })
-        }).map(|i| self.wrap_id(i))
+        })
+        .map(|i| self.wrap_id(i))
     }
 
     #[pyo3(signature = (name=None))]
@@ -623,8 +696,8 @@ impl PyTag {
             AncestorsIter::new(doc, self.id)
                 .take_while(|&p| !matches!(doc.get(p).data, NodeData::Document))
                 .filter(|&p| {
-                    doc.get(p).data.is_element() &&
-                    name.map_or(true, |n| doc.get(p).tag_name() == Some(n))
+                    doc.get(p).data.is_element()
+                        && name.is_none_or(|n| doc.get(p).tag_name() == Some(n))
                 })
                 .collect::<Vec<_>>()
         });
@@ -664,7 +737,8 @@ impl PyTag {
         self.write_doc(|doc| {
             doc.detach(child_id);
             // Count only element children for position (bs4 compat: position refers to element children)
-            let elem_children: Vec<NodeId> = doc.children_ids(self_id)
+            let elem_children: Vec<NodeId> = doc
+                .children_ids(self_id)
                 .filter(|&id| doc.get(id).data.is_element())
                 .collect();
             if pos == 0 {
@@ -757,11 +831,14 @@ impl PyTag {
 
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> PyResult<Bound<'py, PyBytes>> {
+        // Byte encoding is applied by the Python shim; the core always emits UTF-8.
+        let _ = encoding;
         let s = self.__str__();
         Ok(PyBytes::new(py, s.as_bytes()))
     }
 
     fn encode_contents<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
+        let _ = encoding;
         PyBytes::new(py, self.decode_contents().as_bytes())
     }
 
@@ -772,8 +849,8 @@ impl PyTag {
     }
 
     fn __hash__(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
         self.id.hash(&mut h);
         (Arc::as_ptr(&self.doc) as u64).hash(&mut h);
@@ -782,7 +859,10 @@ impl PyTag {
 
     // ── Internal helper (Python can't call this) ──────────────────────────────
     fn wrap_node(&self, id: NodeId) -> PyTag {
-        PyTag { doc: Arc::clone(&self.doc), id }
+        PyTag {
+            doc: Arc::clone(&self.doc),
+            id,
+        }
     }
 
     /// All elements after self in document order (for find_all_next).
@@ -790,8 +870,8 @@ impl PyTag {
         let ids = self.read_doc(|doc| {
             NextElementsIter::new(doc, self.id)
                 .filter(|&id| {
-                    doc.get(id).data.is_element() &&
-                    name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                    doc.get(id).data.is_element()
+                        && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
                 })
                 .collect::<Vec<NodeId>>()
         });
@@ -804,8 +884,8 @@ impl PyTag {
         let ids = self.read_doc(|doc| {
             PrevSiblingsIter::new(doc, self.id)
                 .filter(|&id| {
-                    doc.get(id).data.is_element() &&
-                    name.map_or(true, |n| doc.get(id).tag_name() == Some(n))
+                    doc.get(id).data.is_element()
+                        && name.is_none_or(|n| doc.get(id).tag_name() == Some(n))
                 })
                 .collect::<Vec<NodeId>>()
         });
@@ -815,7 +895,11 @@ impl PyTag {
     /// Create a text node in the same document. Used by the Python shim to
     /// convert string arguments to mutation methods into _Tag objects.
     fn _make_text(&self, text: &str) -> PyTag {
-        let id = self.doc.write().expect("lock").alloc(NodeData::Text(text.to_owned()));
+        let id = self
+            .doc
+            .write()
+            .expect("lock")
+            .alloc(NodeData::Text(text.to_owned()));
         self.wrap_id(id)
     }
 }
@@ -838,19 +922,39 @@ impl PyDocument {
 impl PyDocument {
     #[new]
     #[pyo3(signature = (markup, features=None, from_encoding=None))]
-    fn new(markup: Bound<'_, PyAny>, features: Option<&str>, from_encoding: Option<&str>) -> PyResult<Self> {
+    fn new(
+        py: Python<'_>,
+        markup: Bound<'_, PyAny>,
+        features: Option<&str>,
+        from_encoding: Option<&str>,
+    ) -> PyResult<Self> {
         let _ = features; // accepted for BS4 compat; we always use html5ever
-        let opts = ParseOptions { from_encoding: from_encoding.map(|s| s.to_owned()) };
-        let doc = if let Ok(s) = markup.extract::<String>() {
-            parse_html(&s, opts)
+        let opts = ParseOptions {
+            from_encoding: from_encoding.map(|s| s.to_owned()),
+        };
+
+        // Extract the input while holding the GIL, then release it for the
+        // (potentially large) parse so other Python threads can run concurrently.
+        enum Input {
+            Str(String),
+            Bytes(Vec<u8>),
+        }
+        let input = if let Ok(s) = markup.extract::<String>() {
+            Input::Str(s)
         } else if let Ok(b) = markup.extract::<Vec<u8>>() {
-            parse_html_bytes(&b, opts)
+            Input::Bytes(b)
         } else {
             // File-like object: read it.
-            let data: Vec<u8> = markup.call_method0("read")?.extract()?;
-            parse_html_bytes(&data, opts)
+            Input::Bytes(markup.call_method0("read")?.extract()?)
         };
-        Ok(PyDocument { doc: Arc::new(RwLock::new(doc)) })
+
+        let doc = py.detach(move || match input {
+            Input::Str(s) => parse_html(&s, opts),
+            Input::Bytes(b) => parse_html_bytes(&b, opts),
+        });
+        Ok(PyDocument {
+            doc: Arc::new(RwLock::new(doc)),
+        })
     }
 
     // ── Document-level shortcuts ──────────────────────────────────────────────
@@ -858,7 +962,8 @@ impl PyDocument {
     #[getter]
     fn html(&self) -> Option<PyTag> {
         let doc = self.doc.read().ok()?;
-        let id = doc.children_ids(DOCUMENT_ID)
+        let id = doc
+            .children_ids(DOCUMENT_ID)
             .find(|&id| doc.get(id).tag_name() == Some("html"))?;
         Some(self.tag(id))
     }
@@ -883,7 +988,10 @@ impl PyDocument {
 
     /// `soup.div` → first <div>; `soup.p` → first <p>; etc.
     fn __getattr__(&self, name: &str) -> PyResult<Option<PyTag>> {
-        let doc = self.doc.read().map_err(|_| PyValueError::new_err("lock error"))?;
+        let doc = self
+            .doc
+            .read()
+            .map_err(|_| PyValueError::new_err("lock error"))?;
         Ok(find_by_name(&doc, DOCUMENT_ID, name).map(|id| self.tag(id)))
     }
 
@@ -911,7 +1019,8 @@ impl PyDocument {
         limit: usize,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<PyTag>> {
-        self.root_tag().find_all(name, attrs, recursive, string, limit, kwargs)
+        self.root_tag()
+            .find_all(name, attrs, recursive, string, limit, kwargs)
     }
 
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, limit=0, **kwargs))]
@@ -950,7 +1059,9 @@ impl PyDocument {
     /// All descendants of the document (all nodes including text/comment).
     #[getter]
     fn descendants(&self, py: Python) -> Py<PyAny> {
-        let ids: Vec<NodeId> = self.doc.read()
+        let ids: Vec<NodeId> = self
+            .doc
+            .read()
             .map(|doc| DescendantsPreOrder::new(&doc, DOCUMENT_ID).collect())
             .unwrap_or_default();
         let tags: Vec<PyTag> = ids.into_iter().map(|i| self.tag(i)).collect();
@@ -965,55 +1076,68 @@ impl PyDocument {
         if let Some(kw) = kwargs {
             for (k, v) in kw.iter() {
                 let key: String = k.extract()?;
-                let key = if key == "class_" { "class".to_owned() } else { key };
+                let key = if key == "class_" {
+                    "class".to_owned()
+                } else {
+                    key
+                };
                 let val: String = v.extract()?;
-                let qname = QualName::new(
-                    None,
-                    Namespace::from(""),
-                    LocalName::from(key.as_str()),
-                );
+                let qname = QualName::new(None, Namespace::from(""), LocalName::from(key.as_str()));
                 attrs.push(Attr::new(qname, val));
             }
         }
-        let qname = QualName::new(
-            None,
-            markup5ever::ns!(html),
-            LocalName::from(name),
-        );
+        let qname = QualName::new(None, markup5ever::ns!(html), LocalName::from(name));
         let data = NodeData::Element {
             name: qname,
             attrs,
             self_closing: false,
             is_template: false,
         };
-        let id = self.doc.write().map_err(|_| PyValueError::new_err("lock"))?.alloc(data);
+        let id = self
+            .doc
+            .write()
+            .map_err(|_| PyValueError::new_err("lock"))?
+            .alloc(data);
         Ok(self.tag(id))
     }
 
     fn new_string(&self, text: &str) -> PyTag {
-        let id = self.doc.write().expect("lock").alloc(NodeData::Text(text.to_owned()));
+        let id = self
+            .doc
+            .write()
+            .expect("lock")
+            .alloc(NodeData::Text(text.to_owned()));
         self.tag(id)
     }
 
     // ── Serialisation ─────────────────────────────────────────────────────────
 
     fn __str__(&self) -> String {
-        self.doc.read().map(|doc| serialize_node(&doc, DOCUMENT_ID)).unwrap_or_default()
+        self.doc
+            .read()
+            .map(|doc| serialize_node(&doc, DOCUMENT_ID))
+            .unwrap_or_default()
     }
 
-    fn __repr__(&self) -> String { self.__str__() }
+    fn __repr__(&self) -> String {
+        self.__str__()
+    }
 
     #[pyo3(signature = (indent_width=2))]
     fn prettify(&self, indent_width: usize) -> String {
-        self.doc.read()
+        self.doc
+            .read()
             .map(|doc| prettify_node(&doc, DOCUMENT_ID, indent_width))
             .unwrap_or_default()
     }
 
-    fn decode(&self) -> String { self.__str__() }
+    fn decode(&self) -> String {
+        self.__str__()
+    }
 
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
+        let _ = encoding;
         PyBytes::new(py, self.__str__().as_bytes())
     }
 
@@ -1030,8 +1154,7 @@ fn collect_strings(doc: &Document, node: NodeId, out: &mut Vec<String>) {
     match &doc.get(node).data {
         NodeData::Text(t) if !t.is_empty() => out.push(t.clone()),
         NodeData::Comment(_) => {} // skip comments
-        NodeData::Element { name, .. }
-            if matches!(name.local.as_ref(), "script" | "style") => {} // skip like BS4
+        NodeData::Element { name, .. } if matches!(name.local.as_ref(), "script" | "style") => {} // skip like BS4
         _ => {
             for child in doc.children_ids(node) {
                 collect_strings(doc, child, out);
@@ -1053,8 +1176,7 @@ fn collect_string_nodes(doc: &Document, node: NodeId, out: &mut Vec<NodeId>) {
 }
 
 fn find_by_name(doc: &Document, root: NodeId, name: &str) -> Option<NodeId> {
-    DescendantsPreOrder::new(doc, root)
-        .find(|&id| doc.get(id).tag_name() == Some(name))
+    DescendantsPreOrder::new(doc, root).find(|&id| doc.get(id).tag_name() == Some(name))
 }
 
 // ── Module registration ───────────────────────────────────────────────────────

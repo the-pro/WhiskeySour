@@ -1,6 +1,5 @@
 mod iter;
 pub use iter::{
-    AncestorsIter, DescendantsPreOrder, ElementsIter,
-    NextSiblingsIter, PrevSiblingsIter, NextElementsIter,
-    child_index, child_index_from_end,
+    child_index, child_index_from_end, AncestorsIter, DescendantsPreOrder, ElementsIter,
+    NextElementsIter, NextSiblingsIter, PrevSiblingsIter,
 };

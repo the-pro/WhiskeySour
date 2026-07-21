@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use whiskysour_core::node::DOCUMENT_ID;
 use whiskysour_core::parser::html::{parse_html, ParseOptions};
 use whiskysour_core::query::find::{find_all, FindOptions, NameFilter};
-use whiskysour_core::node::DOCUMENT_ID;
 
 fn make_doc() -> whiskysour_core::document::Document {
     let html = "<html><body>".to_owned()

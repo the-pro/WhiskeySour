@@ -1,7 +1,7 @@
 //! Tree traversal iterators over a borrowed `Document`.
 
 use crate::document::Document;
-use crate::node::{NodeData, NodeId};
+use crate::node::NodeId;
 
 // ---------------------------------------------------------------------------
 // Ancestors (parent chain up to the Document root)
@@ -14,7 +14,10 @@ pub struct AncestorsIter<'a> {
 
 impl<'a> AncestorsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
-        AncestorsIter { doc, current: doc.get(start).parent }
+        AncestorsIter {
+            doc,
+            current: doc.get(start).parent,
+        }
     }
 }
 
@@ -40,8 +43,12 @@ pub struct DescendantsPreOrder<'a> {
 impl<'a> DescendantsPreOrder<'a> {
     /// Iterate over all descendants of `root` (not including `root` itself).
     pub fn new(doc: &'a Document, root: NodeId) -> Self {
-        let stack: Vec<NodeId> = doc.children_ids(root).collect::<Vec<_>>()
-            .into_iter().rev().collect();
+        let stack: Vec<NodeId> = doc
+            .children_ids(root)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         DescendantsPreOrder { doc, stack }
     }
 }
@@ -51,8 +58,13 @@ impl<'a> Iterator for DescendantsPreOrder<'a> {
     fn next(&mut self) -> Option<NodeId> {
         let id = self.stack.pop()?;
         // Push children in reverse order so left-most is popped next.
-        let children: Vec<NodeId> = self.doc.children_ids(id).collect::<Vec<_>>()
-            .into_iter().rev().collect();
+        let children: Vec<NodeId> = self
+            .doc
+            .children_ids(id)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
         self.stack.extend(children);
         Some(id)
     }
@@ -68,7 +80,9 @@ pub struct ElementsIter<'a> {
 
 impl<'a> ElementsIter<'a> {
     pub fn new(doc: &'a Document, root: NodeId) -> Self {
-        ElementsIter { inner: DescendantsPreOrder::new(doc, root) }
+        ElementsIter {
+            inner: DescendantsPreOrder::new(doc, root),
+        }
     }
 }
 
@@ -95,7 +109,10 @@ pub struct NextSiblingsIter<'a> {
 
 impl<'a> NextSiblingsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
-        NextSiblingsIter { doc, next: doc.get(start).next_sibling }
+        NextSiblingsIter {
+            doc,
+            next: doc.get(start).next_sibling,
+        }
     }
 }
 
@@ -119,7 +136,10 @@ pub struct PrevSiblingsIter<'a> {
 
 impl<'a> PrevSiblingsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
-        PrevSiblingsIter { doc, prev: doc.get(start).prev_sibling }
+        PrevSiblingsIter {
+            doc,
+            prev: doc.get(start).prev_sibling,
+        }
     }
 }
 
@@ -144,7 +164,9 @@ pub struct NextElementsIter<'a> {
 impl<'a> NextElementsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
         // start at the first child, or next sibling, or parent's next sibling
-        let next = doc.get(start).first_child
+        let next = doc
+            .get(start)
+            .first_child
             .or_else(|| doc.get(start).next_sibling)
             .or_else(|| {
                 let mut cur = start;
@@ -167,7 +189,10 @@ impl<'a> Iterator for NextElementsIter<'a> {
     fn next(&mut self) -> Option<NodeId> {
         let id = self.next?;
         // Advance: try first child, then next sibling, then ancestor's next sibling
-        self.next = self.doc.get(id).first_child
+        self.next = self
+            .doc
+            .get(id)
+            .first_child
             .or_else(|| self.doc.get(id).next_sibling)
             .or_else(|| {
                 let mut cur = id;
@@ -201,10 +226,8 @@ pub fn child_index(doc: &Document, node: NodeId, same_type: bool) -> usize {
         if !doc.get(sib).data.is_element() {
             continue;
         }
-        if same_type {
-            if doc.get(sib).tag_name() != tag.as_deref() {
-                continue;
-            }
+        if same_type && doc.get(sib).tag_name() != tag.as_deref() {
+            continue;
         }
         idx += 1;
         if sib == node {
@@ -221,10 +244,17 @@ pub fn child_index_from_end(doc: &Document, node: NodeId, same_type: bool) -> us
         None => return 1,
     };
     let tag = doc.get(node).tag_name().map(|s| s.to_owned());
-    let total = doc.children_ids(parent)
+    let total = doc
+        .children_ids(parent)
         .filter(|&s| {
-            if !doc.get(s).data.is_element() { return false; }
-            if same_type { doc.get(s).tag_name() == tag.as_deref() } else { true }
+            if !doc.get(s).data.is_element() {
+                return false;
+            }
+            if same_type {
+                doc.get(s).tag_name() == tag.as_deref()
+            } else {
+                true
+            }
         })
         .count();
     let from_start = child_index(doc, node, same_type);

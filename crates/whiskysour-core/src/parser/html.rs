@@ -47,7 +47,9 @@ pub fn parse_html_fragment(markup: &str) -> Document {
     let sink = WsSink::new();
     let ctx = QualName::new(None, ns!(html), local_name!("body"));
     let tendril: StrTendril = markup.into();
-    parse_fragment(sink, ParseOpts::default(), ctx, vec![]).one(tendril).doc
+    parse_fragment(sink, ParseOpts::default(), ctx, vec![])
+        .one(tendril)
+        .doc
 }
 
 // ── Internal sink ─────────────────────────────────────────────────────────────
@@ -104,7 +106,9 @@ impl TreeSink for WsSink {
     type Handle = NodeId;
     type Output = WsSink;
 
-    fn finish(self) -> WsSink { self }
+    fn finish(self) -> WsSink {
+        self
+    }
 
     // ── Error / quirks ────────────────────────────────────────────────────────
     fn parse_error(&mut self, msg: Cow<'static, str>) {
@@ -116,9 +120,13 @@ impl TreeSink for WsSink {
     }
 
     // ── Node identity ─────────────────────────────────────────────────────────
-    fn get_document(&mut self) -> NodeId { DOCUMENT_ID }
+    fn get_document(&mut self) -> NodeId {
+        DOCUMENT_ID
+    }
 
-    fn same_node(&self, x: &NodeId, y: &NodeId) -> bool { x == y }
+    fn same_node(&self, x: &NodeId, y: &NodeId) -> bool {
+        x == y
+    }
 
     fn elem_name<'a>(&'a self, target: &'a NodeId) -> ExpandedName<'a> {
         match &self.doc.get(*target).data {
@@ -128,8 +136,14 @@ impl TreeSink for WsSink {
     }
 
     // ── Node creation ─────────────────────────────────────────────────────────
-    fn create_element(&mut self, name: QualName, html_attrs: Vec<Attribute>, flags: ElementFlags) -> NodeId {
-        let attrs = html_attrs.into_iter()
+    fn create_element(
+        &mut self,
+        name: QualName,
+        html_attrs: Vec<Attribute>,
+        flags: ElementFlags,
+    ) -> NodeId {
+        let attrs = html_attrs
+            .into_iter()
             .map(|a| Attr::new(a.name, a.value.to_string()))
             .collect();
         self.doc.alloc(NodeData::Element {
@@ -155,14 +169,14 @@ impl TreeSink for WsSink {
     fn append(&mut self, parent: &NodeId, child: NodeOrText<NodeId>) {
         match child {
             NodeOrText::AppendNode(id) => self.doc.append_child(*parent, id),
-            NodeOrText::AppendText(t)  => self.append_text(*parent, t),
+            NodeOrText::AppendText(t) => self.append_text(*parent, t),
         }
     }
 
     fn append_before_sibling(&mut self, sibling: &NodeId, child: NodeOrText<NodeId>) {
         match child {
             NodeOrText::AppendNode(id) => self.doc.insert_before(*sibling, id),
-            NodeOrText::AppendText(t)  => self.append_text_before(*sibling, t),
+            NodeOrText::AppendText(t) => self.append_text_before(*sibling, t),
         }
     }
 
@@ -229,7 +243,10 @@ impl TreeSink for WsSink {
         _target: &NodeId,
         _form: &NodeId,
         _nodes: (&NodeId, Option<&NodeId>),
-    ) {}
+    ) {
+    }
 
-    fn is_mathml_annotation_xml_integration_point(&self, _: &NodeId) -> bool { false }
+    fn is_mathml_annotation_xml_integration_point(&self, _: &NodeId) -> bool {
+        false
+    }
 }

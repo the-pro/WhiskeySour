@@ -110,7 +110,10 @@ pub enum PseudoClass {
 /// `a=0, b=1` means `:nth-child(1)` (first child).
 /// `a=2, b=0` means `:nth-child(even)`.
 #[derive(Debug, Clone, PartialEq)]
-pub struct NthArg { pub a: i32, pub b: i32 }
+pub struct NthArg {
+    pub a: i32,
+    pub b: i32,
+}
 
 impl NthArg {
     /// Returns `true` if the 1-based `index` satisfies `An+B`.
@@ -182,10 +185,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn at_end(&self) -> bool {
-        self.pos >= self.input.len()
-    }
-
     // ── Identifiers / strings ─────────────────────────────────────────────────
 
     fn parse_ident(&mut self) -> Result<String, SelectorError> {
@@ -196,9 +195,12 @@ impl<'a> Parser<'a> {
         }
         match self.peek() {
             Some(c) if c.is_alphabetic() || c == '_' => {}
-            _ => return Err(SelectorError(format!(
-                "expected identifier at position {}", self.pos
-            ))),
+            _ => {
+                return Err(SelectorError(format!(
+                    "expected identifier at position {}",
+                    self.pos
+                )))
+            }
         }
         while let Some(c) = self.peek() {
             if c.is_alphanumeric() || c == '-' || c == '_' {
@@ -217,7 +219,9 @@ impl<'a> Parser<'a> {
                 self.advance();
                 let start = self.pos;
                 while let Some(c) = self.peek() {
-                    if c == quote { break; }
+                    if c == quote {
+                        break;
+                    }
                     self.advance();
                 }
                 let val = self.input[start..self.pos].to_owned();
@@ -230,7 +234,9 @@ impl<'a> Parser<'a> {
                 // Unquoted value — read until `]`, `i`, or whitespace.
                 let start = self.pos;
                 while let Some(c) = self.peek() {
-                    if matches!(c, ']' | ' ' | '\t' | '\n') { break; }
+                    if matches!(c, ']' | ' ' | '\t' | '\n') {
+                        break;
+                    }
                     self.advance();
                 }
                 Ok(self.input[start..self.pos].to_owned())
@@ -244,7 +250,9 @@ impl<'a> Parser<'a> {
         let mut selectors = vec![self.parse_selector()?];
         loop {
             self.skip_whitespace();
-            if !self.eat(',') { break; }
+            if !self.eat(',') {
+                break;
+            }
             self.skip_whitespace();
             selectors.push(self.parse_selector()?);
         }
@@ -255,7 +263,10 @@ impl<'a> Parser<'a> {
 
     fn parse_selector(&mut self) -> Result<Selector, SelectorError> {
         let first_simples = self.parse_simple_selector_sequence()?;
-        let mut steps = vec![SelectorStep { combinator: Combinator::None, simples: first_simples }];
+        let mut steps = vec![SelectorStep {
+            combinator: Combinator::None,
+            simples: first_simples,
+        }];
 
         loop {
             // Peek at what follows to determine the combinator.
@@ -263,17 +274,34 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
 
             let combinator = match self.peek() {
-                Some('>') => { self.advance(); self.skip_whitespace(); Combinator::Child }
-                Some('+') => { self.advance(); self.skip_whitespace(); Combinator::Adjacent }
-                Some('~') => { self.advance(); self.skip_whitespace(); Combinator::Sibling }
+                Some('>') => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::Child
+                }
+                Some('+') => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::Adjacent
+                }
+                Some('~') => {
+                    self.advance();
+                    self.skip_whitespace();
+                    Combinator::Sibling
+                }
                 Some(',') | None => break,
                 _ if ws_before => Combinator::Descendant,
                 _ => break,
             };
 
             let simples = self.parse_simple_selector_sequence()?;
-            if simples.is_empty() { break; }
-            steps.push(SelectorStep { combinator, simples });
+            if simples.is_empty() {
+                break;
+            }
+            steps.push(SelectorStep {
+                combinator,
+                simples,
+            });
         }
 
         Ok(Selector { steps })
@@ -286,7 +314,10 @@ impl<'a> Parser<'a> {
 
         // Optional leading type or universal selector.
         match self.peek() {
-            Some('*') => { self.advance(); simples.push(SimpleSelector::Universal); }
+            Some('*') => {
+                self.advance();
+                simples.push(SimpleSelector::Universal);
+            }
             Some(c) if c.is_alphabetic() || c == '_' || c == '-' => {
                 let name = self.parse_ident()?;
                 simples.push(SimpleSelector::Type(name));
@@ -335,15 +366,48 @@ impl<'a> Parser<'a> {
         let op = match self.peek() {
             Some(']') => {
                 self.advance();
-                return Ok(AttrSelector { name, op: AttrOp::Exists, value: String::new(), case_insensitive: false });
+                return Ok(AttrSelector {
+                    name,
+                    op: AttrOp::Exists,
+                    value: String::new(),
+                    case_insensitive: false,
+                });
             }
-            Some('=') => { self.advance(); AttrOp::Equals }
-            Some('~') => { self.advance(); self.eat('='); AttrOp::Includes }
-            Some('|') => { self.advance(); self.eat('='); AttrOp::DashMatch }
-            Some('^') => { self.advance(); self.eat('='); AttrOp::Prefix }
-            Some('$') => { self.advance(); self.eat('='); AttrOp::Suffix }
-            Some('*') => { self.advance(); self.eat('='); AttrOp::Substring }
-            _ => return Err(SelectorError(format!("unexpected char in attribute selector: {:?}", self.peek()))),
+            Some('=') => {
+                self.advance();
+                AttrOp::Equals
+            }
+            Some('~') => {
+                self.advance();
+                self.eat('=');
+                AttrOp::Includes
+            }
+            Some('|') => {
+                self.advance();
+                self.eat('=');
+                AttrOp::DashMatch
+            }
+            Some('^') => {
+                self.advance();
+                self.eat('=');
+                AttrOp::Prefix
+            }
+            Some('$') => {
+                self.advance();
+                self.eat('=');
+                AttrOp::Suffix
+            }
+            Some('*') => {
+                self.advance();
+                self.eat('=');
+                AttrOp::Substring
+            }
+            _ => {
+                return Err(SelectorError(format!(
+                    "unexpected char in attribute selector: {:?}",
+                    self.peek()
+                )))
+            }
         };
 
         self.skip_whitespace();
@@ -352,14 +416,25 @@ impl<'a> Parser<'a> {
 
         // Case-insensitive flag `i`.
         let case_insensitive = match self.peek() {
-            Some('i') | Some('I') => { self.advance(); self.skip_whitespace(); true }
+            Some('i') | Some('I') => {
+                self.advance();
+                self.skip_whitespace();
+                true
+            }
             _ => false,
         };
 
         if !self.eat(']') {
-            return Err(SelectorError("expected ']' to close attribute selector".into()));
+            return Err(SelectorError(
+                "expected ']' to close attribute selector".into(),
+            ));
         }
-        Ok(AttrSelector { name, op, value, case_insensitive })
+        Ok(AttrSelector {
+            name,
+            op,
+            value,
+            case_insensitive,
+        })
     }
 
     // ── Pseudo-class ──────────────────────────────────────────────────────────
@@ -367,27 +442,29 @@ impl<'a> Parser<'a> {
     fn parse_pseudo_class(&mut self) -> Result<PseudoClass, SelectorError> {
         let name = self.parse_ident()?;
         match name.as_str() {
-            "first-child"  => Ok(PseudoClass::FirstChild),
-            "last-child"   => Ok(PseudoClass::LastChild),
-            "only-child"   => Ok(PseudoClass::OnlyChild),
-            "first-of-type"=> Ok(PseudoClass::FirstOfType),
+            "first-child" => Ok(PseudoClass::FirstChild),
+            "last-child" => Ok(PseudoClass::LastChild),
+            "only-child" => Ok(PseudoClass::OnlyChild),
+            "first-of-type" => Ok(PseudoClass::FirstOfType),
             "last-of-type" => Ok(PseudoClass::LastOfType),
             "only-of-type" => Ok(PseudoClass::OnlyOfType),
-            "empty"        => Ok(PseudoClass::Empty),
-            "root"         => Ok(PseudoClass::Root),
-            "nth-child"      => Ok(PseudoClass::NthChild(self.parse_nth_parens()?)),
+            "empty" => Ok(PseudoClass::Empty),
+            "root" => Ok(PseudoClass::Root),
+            "nth-child" => Ok(PseudoClass::NthChild(self.parse_nth_parens()?)),
             "nth-last-child" => Ok(PseudoClass::NthLastChild(self.parse_nth_parens()?)),
-            "nth-of-type"    => Ok(PseudoClass::NthOfType(self.parse_nth_parens()?)),
+            "nth-of-type" => Ok(PseudoClass::NthOfType(self.parse_nth_parens()?)),
             "nth-last-of-type" => Ok(PseudoClass::NthLastOfType(self.parse_nth_parens()?)),
-            "not"   => Ok(PseudoClass::Not(Box::new(self.parse_group_parens()?))),
-            "is"    => Ok(PseudoClass::Is(Box::new(self.parse_group_parens()?))),
+            "not" => Ok(PseudoClass::Not(Box::new(self.parse_group_parens()?))),
+            "is" => Ok(PseudoClass::Is(Box::new(self.parse_group_parens()?))),
             "where" => Ok(PseudoClass::Where(Box::new(self.parse_group_parens()?))),
-            "has"   => Ok(PseudoClass::Has(Box::new(self.parse_group_parens()?))),
+            "has" => Ok(PseudoClass::Has(Box::new(self.parse_group_parens()?))),
             // Silently ignore unknown pseudo-classes (e.g. :hover, :focus) — they
             // match nothing structural, so we treat them as universal matches.
             _ => {
                 // Skip optional arguments.
-                if self.peek() == Some('(') { self.skip_balanced_parens(); }
+                if self.peek() == Some('(') {
+                    self.skip_balanced_parens();
+                }
                 Ok(PseudoClass::Root) // placeholder — treated as always-true later
             }
         }
@@ -408,7 +485,9 @@ impl<'a> Parser<'a> {
 
     fn parse_group_parens(&mut self) -> Result<SelectorGroup, SelectorError> {
         if !self.eat('(') {
-            return Err(SelectorError("expected '(' for pseudo-class argument".into()));
+            return Err(SelectorError(
+                "expected '(' for pseudo-class argument".into(),
+            ));
         }
         self.skip_whitespace();
         let group = self.parse_selector_group()?;
@@ -432,7 +511,7 @@ impl<'a> Parser<'a> {
 
         match tok.to_lowercase().as_str() {
             "even" => return Ok(NthArg { a: 2, b: 0 }),
-            "odd"  => return Ok(NthArg { a: 2, b: 1 }),
+            "odd" => return Ok(NthArg { a: 2, b: 1 }),
             _ => {}
         }
 
@@ -443,7 +522,10 @@ impl<'a> Parser<'a> {
         let mut b: i32 = 0;
 
         let neg_a = self.eat('-');
-        let pos_a = !neg_a && self.eat('+');
+        // Consume a leading '+' sign if present (its only effect is advancing).
+        if !neg_a {
+            self.eat('+');
+        }
 
         // Coefficient before 'n'?
         let coef = self.parse_optional_int();
@@ -452,13 +534,27 @@ impl<'a> Parser<'a> {
         if has_n {
             self.advance(); // consume 'n'
             a = match coef {
-                Some(v) => if neg_a { -v } else { v },
-                None    => if neg_a { -1 } else { 1 },
+                Some(v) => {
+                    if neg_a {
+                        -v
+                    } else {
+                        v
+                    }
+                }
+                None => {
+                    if neg_a {
+                        -1
+                    } else {
+                        1
+                    }
+                }
             };
             self.skip_whitespace();
             // Parse +B or -B
             let neg_b = self.eat('-');
-            if !neg_b { self.eat('+'); }
+            if !neg_b {
+                self.eat('+');
+            }
             self.skip_whitespace();
             if let Some(v) = self.parse_optional_int() {
                 b = if neg_b { -v } else { v };
@@ -466,8 +562,19 @@ impl<'a> Parser<'a> {
         } else {
             // Pure integer — only B, a=0.
             b = match coef {
-                Some(v) => if neg_a { -v } else { v },
-                None => return Err(SelectorError(format!("invalid nth arg at pos {}", self.pos))),
+                Some(v) => {
+                    if neg_a {
+                        -v
+                    } else {
+                        v
+                    }
+                }
+                None => {
+                    return Err(SelectorError(format!(
+                        "invalid nth arg at pos {}",
+                        self.pos
+                    )))
+                }
             };
         }
 
@@ -487,13 +594,20 @@ impl<'a> Parser<'a> {
     }
 
     fn skip_balanced_parens(&mut self) {
-        if !self.eat('(') { return; }
+        if !self.eat('(') {
+            return;
+        }
         let mut depth = 1usize;
         while let Some(c) = self.peek() {
             self.advance();
             match c {
                 '(' => depth += 1,
-                ')' => { depth -= 1; if depth == 0 { break; } }
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
                 _ => {}
             }
         }

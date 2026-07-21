@@ -1,8 +1,8 @@
 //! `Document` — owns the flat node arena and exposes tree operations.
 
+use crate::node::{Attr, Node, NodeData, NodeId};
 use markup5ever::QualName;
 use smallvec::SmallVec;
-use crate::node::{Attr, Node, NodeData, NodeId, DOCUMENT_ID};
 
 /// The central data structure: a flat Vec of Nodes with integer sibling/parent links.
 ///
@@ -53,6 +53,12 @@ impl Document {
     /// Total number of allocated nodes (including tombstoned ones).
     pub fn len(&self) -> usize {
         self.nodes.len()
+    }
+
+    /// A document always contains at least the synthetic root, so it is never
+    /// truly empty; provided to satisfy the `len`/`is_empty` clippy pairing.
+    pub fn is_empty(&self) -> bool {
+        self.nodes.is_empty()
     }
 
     // -----------------------------------------------------------------------
@@ -191,7 +197,10 @@ impl Document {
 
     /// Get the value of a specific attribute on an element node.
     pub fn get_attr(&self, node: NodeId, name: &str) -> Option<&str> {
-        self.attrs(node)?.iter().find(|a| a.local_name() == name).map(|a| a.value.as_str())
+        self.attrs(node)?
+            .iter()
+            .find(|a| a.local_name() == name)
+            .map(|a| a.value.as_str())
     }
 
     /// Set (or add) an attribute on an element (plain string name, no namespace).
@@ -200,12 +209,8 @@ impl Document {
             if let Some(a) = attrs.iter_mut().find(|a| a.local_name() == name) {
                 a.value = value.to_owned();
             } else {
-                use markup5ever::{LocalName, Namespace, Prefix};
-                let qname = QualName::new(
-                    None,
-                    Namespace::from(""),
-                    LocalName::from(name),
-                );
+                use markup5ever::{LocalName, Namespace};
+                let qname = QualName::new(None, Namespace::from(""), LocalName::from(name));
                 attrs.push(Attr::new(qname, value));
             }
         }
@@ -276,8 +281,8 @@ impl Document {
                 }
                 if j > i + 1 {
                     // Remove nodes i+1 .. j-1
-                    for k in (i + 1)..j {
-                        self.detach(children[k]);
+                    for &child in &children[i + 1..j] {
+                        self.detach(child);
                     }
                     if let NodeData::Text(t) = &mut self.nodes[children[i] as usize].data {
                         *t = merged;

@@ -20,7 +20,10 @@ pub struct Attr {
 
 impl Attr {
     pub fn new(name: QualName, value: impl Into<String>) -> Self {
-        Self { name, value: value.into() }
+        Self {
+            name,
+            value: value.into(),
+        }
     }
 
     /// The local (unqualified) name as a plain &str, e.g. "class", "href".
@@ -61,7 +64,11 @@ pub enum NodeData {
     ProcessingInstruction { target: String, data: String },
 
     /// A `<!DOCTYPE>` declaration.
-    Doctype { name: String, public_id: String, system_id: String },
+    Doctype {
+        name: String,
+        public_id: String,
+        system_id: String,
+    },
 }
 
 impl NodeData {
@@ -121,8 +128,14 @@ pub struct Node {
 
 impl Node {
     pub fn new(data: NodeData) -> Self {
-        Node { data, parent: None, first_child: None, last_child: None,
-               prev_sibling: None, next_sibling: None }
+        Node {
+            data,
+            parent: None,
+            first_child: None,
+            last_child: None,
+            prev_sibling: None,
+            next_sibling: None,
+        }
     }
 
     #[inline]

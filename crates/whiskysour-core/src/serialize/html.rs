@@ -5,12 +5,12 @@
 //! `prettify_node`   → indented outer HTML
 
 use crate::document::Document;
-use crate::node::{NodeData, NodeId, DOCUMENT_ID};
+use crate::node::{NodeData, NodeId};
 
 // HTML5 void elements — must not have closing tags.
 const VOID_ELEMENTS: &[&str] = &[
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source",
+    "track", "wbr",
 ];
 
 // Raw-text elements whose content must NOT be escaped.
@@ -67,7 +67,9 @@ fn write_node(doc: &Document, node: NodeId, buf: &mut String) {
 
         NodeData::Text(text) => {
             // Check if the parent is a raw-text element.
-            let raw = doc.get(node).parent
+            let raw = doc
+                .get(node)
+                .parent
                 .and_then(|p| doc.get(p).tag_name())
                 .map(|t| RAW_TEXT.contains(&t))
                 .unwrap_or(false);
@@ -202,10 +204,10 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
 fn escape_text(s: &str, buf: &mut String) {
     for c in s.chars() {
         match c {
-            '&'  => buf.push_str("&amp;"),
-            '<'  => buf.push_str("&lt;"),
-            '>'  => buf.push_str("&gt;"),
-            _    => buf.push(c),
+            '&' => buf.push_str("&amp;"),
+            '<' => buf.push_str("&lt;"),
+            '>' => buf.push_str("&gt;"),
+            _ => buf.push(c),
         }
     }
 }
@@ -213,9 +215,9 @@ fn escape_text(s: &str, buf: &mut String) {
 fn escape_attr(s: &str, buf: &mut String) {
     for c in s.chars() {
         match c {
-            '&'  => buf.push_str("&amp;"),
-            '"'  => buf.push_str("&quot;"),
-            _    => buf.push(c),
+            '&' => buf.push_str("&amp;"),
+            '"' => buf.push_str("&quot;"),
+            _ => buf.push(c),
         }
     }
 }
