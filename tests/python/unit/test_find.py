@@ -443,3 +443,40 @@ class TestFindEdgeCases:
         result = soup.find_all("p")
         assert hasattr(result, "__len__")
         assert hasattr(result, "__getitem__")
+
+
+class TestFindAllStringFastPath:
+    HTML = (
+        "<div id='a'><p>Needle</p><span>Needle</span><!--Needle--></div>"
+        "<div id='b'><p>Needle</p><b>needle</b></div>"
+    )
+
+    def test_exact_string_matches_all_string_nodes(self, parse):
+        soup = parse(self.HTML)
+        found = soup.find_all(string="Needle")
+        assert [str(s) for s in found] == ["Needle"] * 4
+        assert [s.parent.name for s in found if s.parent is not None][:2] == ["p", "span"]
+
+    def test_exact_string_is_case_sensitive(self, parse):
+        soup = parse(self.HTML)
+        assert [str(s) for s in soup.find_all(string="needle")] == ["needle"]
+
+    def test_exact_string_limit(self, parse):
+        soup = parse(self.HTML)
+        found = soup.find_all(string="Needle", limit=2)
+        assert len(found) == 2
+
+    def test_exact_string_scoped_to_subtree(self, parse):
+        soup = parse(self.HTML)
+        b = soup.find("div", id="b")
+        assert [str(s) for s in b.find_all(string="Needle")] == ["Needle"]
+
+    def test_exact_string_no_match(self, parse):
+        soup = parse(self.HTML)
+        assert soup.find_all(string="absent") == []
+        assert soup.find(string="absent") is None
+
+    def test_regex_and_callable_string_still_work(self, parse):
+        soup = parse(self.HTML)
+        assert len(soup.find_all(string=re.compile("^[Nn]eedle$"))) == 5
+        assert len(soup.find_all(string=lambda s: s.lower() == "needle")) == 5

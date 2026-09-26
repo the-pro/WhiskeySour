@@ -515,3 +515,36 @@ class TestNavigableString:
         element_children = [c for c in ul.children if c.name]
         assert all(c.name == "li" for c in element_children)
         assert len(element_children) == 3
+
+
+class TestSubtreeTraversalBounds:
+    HTML = "<div id='a'><p>1<b>2</b></p><i>3</i></div><div id='b'><p>4</p></div>"
+
+    def test_descendants_stay_inside_subtree(self, parse):
+        soup = parse(self.HTML)
+        a = soup.find("div", id="a")
+        names = [d.name if d.name is not None else str(d) for d in a.descendants]
+        assert names == ["p", "1", "b", "2", "i", "3"]
+
+    def test_descendants_of_last_child_leaf(self, parse):
+        soup = parse(self.HTML)
+        i = soup.find("i")
+        assert [str(d) for d in i.descendants] == ["3"]
+
+    def test_find_all_stays_inside_subtree(self, parse):
+        soup = parse(self.HTML)
+        a = soup.find("div", id="a")
+        assert [p.get_text() for p in a.find_all("p")] == ["12"]
+
+    def test_get_text_separator_and_strip(self, parse):
+        soup = parse("<div> a <b> </b><script>x()</script><i>c </i><!--z--></div>")
+        div = soup.find("div")
+        assert div.get_text("|") == " a | |c "
+        assert div.get_text("|", strip=True) == "a|c"
+        assert list(div.stripped_strings) == ["a", "c"]
+
+    def test_string_with_exactly_one_text_node(self, parse):
+        soup = parse("<p><b>only</b></p><p>a<b>b</b></p>")
+        first, second = soup.find_all("p")
+        assert first.string == "only"
+        assert second.string is None

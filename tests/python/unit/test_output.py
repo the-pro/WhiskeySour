@@ -343,3 +343,23 @@ class TestUnicodeOutput:
         soup = parse("<p>&#65;&#66;&#67;</p>")  # ABC
         p = soup.find("p")
         assert "ABC" in p.get_text()
+
+
+class TestEscapingBoundaries:
+    def test_escape_adjacent_to_multibyte_chars(self, parse):
+        soup = parse("<p>é&amp;ü&lt;日本&gt;€</p>")
+        assert str(soup.find("p")) == "<p>é&amp;ü&lt;日本&gt;€</p>"
+
+    def test_escape_at_start_and_end(self, parse):
+        soup = parse("<p>&amp;x&lt;</p>")
+        assert str(soup.find("p")) == "<p>&amp;x&lt;</p>"
+
+    def test_attr_escape_with_multibyte(self, parse, ws):
+        soup = parse('<a title="ü&quot;é&amp;">x</a>')
+        assert 'title="ü&quot;é&amp;"' in str(soup.find("a"))
+
+    def test_prettify_nested_indentation(self, parse):
+        soup = parse("<div><p>a &amp; b</p><ul><li>1</li></ul></div>")
+        out = soup.find("div").prettify()
+        assert "  <p>a &amp; b</p>\n" in out
+        assert "    <li>1</li>\n" in out

@@ -524,3 +524,67 @@ class TestCompiledSelectors:
     def test_invalid_selector_raises(self, soup):
         with pytest.raises(Exception):
             soup.select("###invalid###selector")
+
+
+# ===========================================================================
+# 12. Performance-path regressions (memoised nth-*, limit, selector cache)
+# ===========================================================================
+
+class TestSelectorFastPaths:
+    LIST_HTML = "<ul>" + "".join(
+        f'<li class="{"a" if i % 3 else "b"}">{i}</li><!--c-->' for i in range(1, 61)
+    ) + "</ul>"
+
+    def test_nth_child_long_list(self, parse):
+        soup = parse(self.LIST_HTML)
+        got = [li.get_text() for li in soup.select("li:nth-child(7n+3)")]
+        assert got == [str(i) for i in range(3, 61, 7)]
+
+    def test_nth_last_child_long_list(self, parse):
+        soup = parse(self.LIST_HTML)
+        got = [li.get_text() for li in soup.select("li:nth-last-child(-n+2)")]
+        assert got == ["59", "60"]
+
+    def test_nth_child_ignores_comments_and_text(self, parse):
+        soup = parse("<div>x<p>1</p><!--c--> y <p>2</p>z<p>3</p></div>")
+        assert [p.get_text() for p in soup.select("p:nth-child(2)")] == ["2"]
+        assert [p.get_text() for p in soup.select("p:last-child")] == ["3"]
+
+    def test_nth_of_type_mixed_siblings(self, parse):
+        soup = parse("<div><p>p1</p><span>s1</span><p>p2</p><span>s2</span><p>p3</p></div>")
+        assert [t.get_text() for t in soup.select("p:nth-of-type(2)")] == ["p2"]
+        assert [t.get_text() for t in soup.select("span:last-of-type")] == ["s2"]
+        assert [t.get_text() for t in soup.select("div :nth-last-of-type(1)")] == ["s2", "p3"]
+
+    def test_nth_child_under_not_and_has(self, parse):
+        soup = parse(self.LIST_HTML)
+        assert len(soup.select("li:not(:nth-child(odd))")) == 30
+        assert len(soup.select("ul:has(li:nth-child(60))")) == 1
+        assert soup.select("ul:has(li:nth-child(61))") == []
+
+    def test_select_limit_returns_prefix(self, parse):
+        soup = parse(self.LIST_HTML)
+        full = soup.select("li.a")
+        assert soup.select("li.a", limit=4) == full[:4]
+        assert soup.select("li.a", limit=1000) == full
+
+    def test_select_limit_on_subtree(self, parse):
+        soup = parse("<div id='x'><p>1</p><p>2</p></div><p>3</p>")
+        div = soup.select_one("#x")
+        assert [p.get_text() for p in div.select("p", limit=5)] == ["1", "2"]
+
+    def test_repeated_selector_is_stable(self, parse):
+        soup = parse(self.LIST_HTML)
+        first = soup.select("li.b")
+        for _ in range(3):
+            assert soup.select("li.b") == first
+
+    def test_invalid_selector_raises_every_time(self, parse):
+        soup = parse("<p>x</p>")
+        for _ in range(2):
+            with pytest.raises(Exception):
+                soup.select("p[")
+
+    def test_dash_match(self, parse):
+        soup = parse('<p lang="en">1</p><p lang="en-US">2</p><p lang="english">3</p><p lang="e">4</p>')
+        assert [p.get_text() for p in soup.select("[lang|=en]")] == ["1", "2"]

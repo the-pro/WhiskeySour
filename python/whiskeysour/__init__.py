@@ -229,15 +229,16 @@ def _tag_name_matches(tag_name: Optional[str], spec: Any) -> bool:
     return False
 
 
+def _is_complex(v: Any) -> bool:
+    return isinstance(v, (re.Pattern, list)) or callable(v)
+
+
 def _needs_python_filter(
     name: Any,
     attrs: Dict[str, Any],
     string: Any,
 ) -> bool:
     """Return True if any filter requires Python-side evaluation."""
-    def _is_complex(v):
-        return isinstance(v, (re.Pattern,)) or callable(v) or isinstance(v, list)
-
     if _is_complex(name):
         return True
     for v in attrs.values():
@@ -533,31 +534,13 @@ class Tag:
 
     def _find_string_nodes(self, string_spec: Any, limit: int) -> List[NavigableString]:
         """Return NavigableString nodes (text/comment/etc.) matching string_spec."""
-        results: List[NavigableString] = []
-        _STRING_TYPES = ("text", "comment", "cdata", "doctype", "processing_instruction")
-        for node in self._rust.descendants:
-            nt = node.node_type
-            if nt not in _STRING_TYPES:
-                continue
-            wrapped = _wrap(node)
-            # Pass the NavigableString object to callables (for isinstance checks)
-            # but compare string value for string/regex specs
-            if callable(string_spec):
-                try:
-                    match = bool(string_spec(wrapped))
-                except Exception:
-                    match = False
-            else:
-                match = _attr_matches(str(wrapped) if wrapped is not None else None, string_spec)
-            if match:
-                results.append(wrapped)
-                if limit and len(results) >= limit:
-                    break
-        return results
+        return _find_string_nodes(self._rust, string_spec, limit)
 
     def select(self, selector: str, limit: int = 0) -> List["Tag"]:
-        results = self._rust.select(selector)
-        wrapped = [Tag(r) for r in results]
+        if limit > 0:
+            # Rust stops traversing once `limit` matches are found.
+            return [Tag(r) for r in self._rust.select(selector, limit)]
+        wrapped = [Tag(r) for r in self._rust.select(selector)]
         return wrapped[:limit] if limit else wrapped
 
     def select_one(self, selector: str) -> Optional["Tag"]:
@@ -724,6 +707,31 @@ class Tag:
 
     def __bool__(self) -> bool:
         return True
+
+
+def _find_string_nodes(rust: Any, string_spec: Any, limit: int) -> List[NavigableString]:
+    """Return string-like descendants of ``rust`` (text/comment/etc.) matching string_spec."""
+    if isinstance(string_spec, str) and not callable(string_spec) and limit >= 0:
+        # Exact-text match: Rust filters by node type and value in one pass.
+        return [_wrap(n) for n in rust.find_strings(string_spec, limit)]
+
+    results: List[NavigableString] = []
+    for node in rust.find_strings():
+        wrapped = _wrap(node)
+        # Pass the NavigableString object to callables (for isinstance checks)
+        # but compare string value for string/regex specs
+        if callable(string_spec):
+            try:
+                match = bool(string_spec(wrapped))
+            except Exception:
+                match = False
+        else:
+            match = _attr_matches(str(wrapped) if wrapped is not None else None, string_spec)
+        if match:
+            results.append(wrapped)
+            if limit and len(results) >= limit:
+                break
+    return results
 
 
 # ── Document wrapper ──────────────────────────────────────────────────────────
@@ -920,31 +928,13 @@ class WhiskeySour:
 
     def _find_string_nodes(self, string_spec: Any, limit: int) -> List[NavigableString]:
         """Return NavigableString nodes (text/comment/etc.) matching string_spec."""
-        results: List[NavigableString] = []
-        _STRING_TYPES = ("text", "comment", "cdata", "doctype", "processing_instruction")
-        for node in self._rust.descendants:
-            nt = node.node_type
-            if nt not in _STRING_TYPES:
-                continue
-            wrapped = _wrap(node)
-            # Pass the NavigableString object to callables (for isinstance checks)
-            # but compare string value for string/regex specs
-            if callable(string_spec):
-                try:
-                    match = bool(string_spec(wrapped))
-                except Exception:
-                    match = False
-            else:
-                match = _attr_matches(str(wrapped) if wrapped is not None else None, string_spec)
-            if match:
-                results.append(wrapped)
-                if limit and len(results) >= limit:
-                    break
-        return results
+        return _find_string_nodes(self._rust, string_spec, limit)
 
     def select(self, selector: str, limit: int = 0) -> List[Tag]:
-        results = self._rust.select(selector)
-        wrapped = [Tag(r) for r in results]
+        if limit > 0:
+            # Rust stops traversing once `limit` matches are found.
+            return [Tag(r) for r in self._rust.select(selector, limit)]
+        wrapped = [Tag(r) for r in self._rust.select(selector)]
         return wrapped[:limit] if limit else wrapped
 
     def select_one(self, selector: str) -> Optional[Tag]:

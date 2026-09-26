@@ -4,31 +4,154 @@ use super::parser::{
     AttrOp, AttrSelector, Combinator, PseudoClass, Selector, SelectorGroup, SelectorStep,
     SimpleSelector,
 };
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
+
 use crate::document::Document;
 use crate::node::{NodeData, NodeId};
 use crate::traversal::{child_index, child_index_from_end};
+
+// ── Match context ─────────────────────────────────────────────────────────────
+
+/// Per-query scratch state shared across every node tested by one
+/// `select()` call.
+///
+/// It memoises nth-child / nth-of-type sibling indices. Without it,
+/// `li:nth-child(2n)` over a list of N items rescans the sibling list for
+/// every candidate (O(N²)); with it each parent's children are indexed once.
+#[derive(Default)]
+pub(crate) struct MatchContext {
+    /// (node, kind) → 1-based index. `kind` bit 0 = same-type, bit 1 = from-end.
+    nth: RefCell<HashMap<(NodeId, u8), u32, BuildHasherDefault<IdHasher>>>,
+}
+
+/// Multiplicative hasher for small integer keys; SipHash is needlessly slow here.
+#[derive(Default)]
+pub(crate) struct IdHasher(u64);
+
+impl Hasher for IdHasher {
+    #[inline]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    #[inline]
+    fn write_u8(&mut self, n: u8) {
+        self.write_u64(n as u64);
+    }
+    #[inline]
+    fn write_u32(&mut self, n: u32) {
+        self.write_u64(n as u64);
+    }
+    #[inline]
+    fn write_u64(&mut self, n: u64) {
+        self.0 = (self.0.rotate_left(5) ^ n).wrapping_mul(0x51_7c_c1_b7_27_22_0a_95);
+    }
+}
+
+impl MatchContext {
+    /// 1-based position of `node` among its element siblings, optionally
+    /// restricted to siblings with the same tag name and/or counted from the end.
+    fn child_index(&self, doc: &Document, node: NodeId, same_type: bool, from_end: bool) -> usize {
+        let kind = same_type as u8 | ((from_end as u8) << 1);
+        if let Some(&idx) = self.nth.borrow().get(&(node, kind)) {
+            return idx as usize;
+        }
+        let parent = match doc.get(node).parent {
+            Some(p) => p,
+            None => return 1,
+        };
+
+        // Index every sibling under `parent` in a single pass so later
+        // siblings are O(1) lookups.
+        let mut map = self.nth.borrow_mut();
+        let p = doc.get(parent);
+        let mut cur = if from_end {
+            p.last_child
+        } else {
+            p.first_child
+        };
+        let mut count: u32 = 0;
+        let mut per_type: Vec<(&markup5ever::LocalName, u32)> = Vec::new();
+        while let Some(id) = cur {
+            let n = doc.get(id);
+            if let NodeData::Element { name, .. } = &n.data {
+                let idx = if same_type {
+                    match per_type.iter_mut().find(|(t, _)| **t == name.local) {
+                        Some((_, c)) => {
+                            *c += 1;
+                            *c
+                        }
+                        None => {
+                            per_type.push((&name.local, 1));
+                            1
+                        }
+                    }
+                } else {
+                    count += 1;
+                    count
+                };
+                map.insert((id, kind), idx);
+            }
+            cur = if from_end {
+                n.prev_sibling
+            } else {
+                n.next_sibling
+            };
+        }
+
+        match map.get(&(node, kind)) {
+            Some(&idx) => idx as usize,
+            // `node` is not an element (never cached); fall back to a scan.
+            None if from_end => child_index_from_end(doc, node, same_type),
+            None => child_index(doc, node, same_type),
+        }
+    }
+}
 
 // ── Public entry points ───────────────────────────────────────────────────────
 
 /// Returns `true` if `node` matches any selector in `group`.
 pub fn matches_selector_group(doc: &Document, node: NodeId, group: &SelectorGroup) -> bool {
-    group.0.iter().any(|s| matches_selector(doc, node, s))
+    matches_group(doc, node, group, &MatchContext::default())
+}
+
+/// Like [`matches_selector_group`], sharing memoised state across calls.
+pub(crate) fn matches_group(
+    doc: &Document,
+    node: NodeId,
+    group: &SelectorGroup,
+    ctx: &MatchContext,
+) -> bool {
+    group.0.iter().any(|s| matches_selector(doc, node, s, ctx))
 }
 
 // ── Selector matching (right-to-left) ─────────────────────────────────────────
 
-fn matches_selector(doc: &Document, node: NodeId, sel: &Selector) -> bool {
+fn matches_selector(doc: &Document, node: NodeId, sel: &Selector, ctx: &MatchContext) -> bool {
     // Match from the rightmost step backwards.
-    match_steps(doc, node, &sel.steps, sel.steps.len())
+    match_steps(doc, node, &sel.steps, sel.steps.len(), ctx)
 }
 
-fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize) -> bool {
+fn match_steps(
+    doc: &Document,
+    node: NodeId,
+    steps: &[SelectorStep],
+    upto: usize,
+    ctx: &MatchContext,
+) -> bool {
     if upto == 0 {
         return true;
     }
     let step = &steps[upto - 1];
 
-    if !matches_simple_sequence(doc, node, &step.simples) {
+    if !matches_simple_sequence(doc, node, &step.simples, ctx) {
         return false;
     }
     if upto == 1 {
@@ -45,7 +168,7 @@ fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize
                     break;
                 }
                 // Temporarily build a pseudo-step to test the ancestor.
-                if match_steps(doc, p, steps, upto - 1) {
+                if match_steps(doc, p, steps, upto - 1, ctx) {
                     return true;
                 }
                 cur = doc.get(p).parent;
@@ -54,7 +177,7 @@ fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize
         }
         Combinator::Child => match doc.get(node).parent {
             Some(p) if !matches!(doc.get(p).data, NodeData::Document) => {
-                match_steps(doc, p, steps, upto - 1)
+                match_steps(doc, p, steps, upto - 1, ctx)
             }
             _ => false,
         },
@@ -62,7 +185,7 @@ fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize
             let mut prev = doc.get(node).prev_sibling;
             while let Some(sib) = prev {
                 if doc.get(sib).data.is_element() {
-                    return match_steps(doc, sib, steps, upto - 1);
+                    return match_steps(doc, sib, steps, upto - 1, ctx);
                 }
                 prev = doc.get(sib).prev_sibling;
             }
@@ -71,7 +194,7 @@ fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize
         Combinator::Sibling => {
             let mut prev = doc.get(node).prev_sibling;
             while let Some(sib) = prev {
-                if doc.get(sib).data.is_element() && match_steps(doc, sib, steps, upto - 1) {
+                if doc.get(sib).data.is_element() && match_steps(doc, sib, steps, upto - 1, ctx) {
                     return true;
                 }
                 prev = doc.get(sib).prev_sibling;
@@ -83,15 +206,25 @@ fn match_steps(doc: &Document, node: NodeId, steps: &[SelectorStep], upto: usize
 
 // ── Simple selector sequence matching ────────────────────────────────────────
 
-fn matches_simple_sequence(doc: &Document, node: NodeId, simples: &[SimpleSelector]) -> bool {
+fn matches_simple_sequence(
+    doc: &Document,
+    node: NodeId,
+    simples: &[SimpleSelector],
+    ctx: &MatchContext,
+) -> bool {
     // Must be an element for any simple selector to match.
     if !doc.get(node).data.is_element() {
         return false;
     }
-    simples.iter().all(|s| matches_simple(doc, node, s))
+    simples.iter().all(|s| matches_simple(doc, node, s, ctx))
 }
 
-fn matches_simple(doc: &Document, node: NodeId, simple: &SimpleSelector) -> bool {
+fn matches_simple(
+    doc: &Document,
+    node: NodeId,
+    simple: &SimpleSelector,
+    ctx: &MatchContext,
+) -> bool {
     match simple {
         SimpleSelector::Universal => true,
 
@@ -103,7 +236,7 @@ fn matches_simple(doc: &Document, node: NodeId, simple: &SimpleSelector) -> bool
 
         SimpleSelector::Attribute(attr_sel) => matches_attribute(doc, node, attr_sel),
 
-        SimpleSelector::Pseudo(pseudo) => matches_pseudo(doc, node, pseudo),
+        SimpleSelector::Pseudo(pseudo) => matches_pseudo(doc, node, pseudo, ctx),
     }
 }
 
@@ -147,7 +280,9 @@ fn attr_op_match(op: &AttrOp, raw: &str, val: &str) -> bool {
     match op {
         AttrOp::Equals => raw == val,
         AttrOp::Includes => raw.split_ascii_whitespace().any(|t| t == val),
-        AttrOp::DashMatch => raw == val || raw.starts_with(&format!("{}-", val)),
+        AttrOp::DashMatch => {
+            raw == val || (raw.starts_with(val) && raw.as_bytes().get(val.len()) == Some(&b'-'))
+        }
         AttrOp::Prefix => raw.starts_with(val),
         AttrOp::Suffix => raw.ends_with(val),
         AttrOp::Substring => raw.contains(val),
@@ -157,7 +292,8 @@ fn attr_op_match(op: &AttrOp, raw: &str, val: &str) -> bool {
 
 // ── Pseudo-class matching ─────────────────────────────────────────────────────
 
-fn matches_pseudo(doc: &Document, node: NodeId, pseudo: &PseudoClass) -> bool {
+fn matches_pseudo(doc: &Document, node: NodeId, pseudo: &PseudoClass, ctx: &MatchContext) -> bool {
+    let idx = |same_type, from_end| ctx.child_index(doc, node, same_type, from_end);
     match pseudo {
         PseudoClass::Root => {
             // The <html> element is the root.
@@ -169,32 +305,26 @@ fn matches_pseudo(doc: &Document, node: NodeId, pseudo: &PseudoClass) -> bool {
             n.data.is_element() || matches!(&n.data, NodeData::Text(t) if !t.is_empty())
         }),
 
-        PseudoClass::FirstChild => child_index(doc, node, false) == 1,
-        PseudoClass::LastChild => child_index_from_end(doc, node, false) == 1,
-        PseudoClass::OnlyChild => {
-            child_index(doc, node, false) == 1 && child_index_from_end(doc, node, false) == 1
-        }
+        PseudoClass::FirstChild => idx(false, false) == 1,
+        PseudoClass::LastChild => idx(false, true) == 1,
+        PseudoClass::OnlyChild => idx(false, false) == 1 && idx(false, true) == 1,
 
-        PseudoClass::FirstOfType => child_index(doc, node, true) == 1,
-        PseudoClass::LastOfType => child_index_from_end(doc, node, true) == 1,
-        PseudoClass::OnlyOfType => {
-            child_index(doc, node, true) == 1 && child_index_from_end(doc, node, true) == 1
-        }
+        PseudoClass::FirstOfType => idx(true, false) == 1,
+        PseudoClass::LastOfType => idx(true, true) == 1,
+        PseudoClass::OnlyOfType => idx(true, false) == 1 && idx(true, true) == 1,
 
-        PseudoClass::NthChild(arg) => arg.matches(child_index(doc, node, false)),
-        PseudoClass::NthLastChild(arg) => arg.matches(child_index_from_end(doc, node, false)),
-        PseudoClass::NthOfType(arg) => arg.matches(child_index(doc, node, true)),
-        PseudoClass::NthLastOfType(arg) => arg.matches(child_index_from_end(doc, node, true)),
+        PseudoClass::NthChild(arg) => arg.matches(idx(false, false)),
+        PseudoClass::NthLastChild(arg) => arg.matches(idx(false, true)),
+        PseudoClass::NthOfType(arg) => arg.matches(idx(true, false)),
+        PseudoClass::NthLastOfType(arg) => arg.matches(idx(true, true)),
 
-        PseudoClass::Not(group) => !matches_selector_group(doc, node, group),
-        PseudoClass::Is(group) | PseudoClass::Where(group) => {
-            matches_selector_group(doc, node, group)
-        }
+        PseudoClass::Not(group) => !matches_group(doc, node, group, ctx),
+        PseudoClass::Is(group) | PseudoClass::Where(group) => matches_group(doc, node, group, ctx),
 
         PseudoClass::Has(group) => {
             // :has(rel-sel) — at least one descendant matches `group`.
             use crate::traversal::DescendantsPreOrder;
-            DescendantsPreOrder::new(doc, node).any(|d| matches_selector_group(doc, d, group))
+            DescendantsPreOrder::new(doc, node).any(|d| matches_group(doc, d, group, ctx))
         }
     }
 }

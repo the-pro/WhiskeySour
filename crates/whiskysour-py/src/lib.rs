@@ -21,7 +21,7 @@ use whiskysour_core::{
     node::{Attr, NodeData, NodeId, DOCUMENT_ID},
     parser::{parse_html, parse_html_bytes, ParseOptions},
     query::{
-        find_all, find_one, select, select_one, AttrFilter, AttrValueFilter, FindOptions,
+        find_all, find_one, select_limit, select_one, AttrFilter, AttrValueFilter, FindOptions,
         NameFilter,
     },
     serialize::{prettify_node, serialize_inner, serialize_node},
@@ -307,8 +307,9 @@ impl PyTag {
     #[getter]
     fn string_node(&self) -> Option<PyTag> {
         self.read_doc(|doc| {
-            let mut text_nodes: Vec<NodeId> = Vec::new();
-            collect_string_nodes(doc, self.id, &mut text_nodes);
+            // Only need to know whether there is exactly one, so stop at two.
+            let mut text_nodes: Vec<NodeId> = Vec::with_capacity(2);
+            collect_string_nodes(doc, self.id, &mut text_nodes, 2);
             if text_nodes.len() == 1 {
                 Some(text_nodes[0])
             } else {
@@ -328,16 +329,43 @@ impl PyTag {
         ids.into_iter().map(|i| self.wrap_id(i)).collect()
     }
 
+    /// Descendant string-like nodes (text, comment, CDATA, doctype, PI) in
+    /// document order. With `value`, only nodes whose text equals it; `limit`
+    /// (0 = unlimited) caps the result. Backs `find_all(string=...)`.
+    #[pyo3(signature = (value=None, limit=0))]
+    fn find_strings(&self, value: Option<&str>, limit: usize) -> Vec<PyTag> {
+        let limit = if limit == 0 { usize::MAX } else { limit };
+        let ids = self.read_doc(|doc| {
+            DescendantsPreOrder::new(doc, self.id)
+                .filter(|&id| {
+                    let text = match &doc.get(id).data {
+                        NodeData::Text(t) | NodeData::Comment(t) | NodeData::CData(t) => t,
+                        NodeData::Doctype { name, .. } => name,
+                        NodeData::ProcessingInstruction { data, .. } => data,
+                        NodeData::Element { .. } | NodeData::Document => return false,
+                    };
+                    value.is_none_or(|v| v == text)
+                })
+                .take(limit)
+                .collect::<Vec<_>>()
+        });
+        ids.into_iter().map(|i| self.wrap_id(i)).collect()
+    }
+
     /// `.string` — the single text child if the element has exactly one
     /// non-empty text descendant; None otherwise.
     #[getter]
     fn string(&self) -> Option<String> {
         self.read_doc(|doc| {
-            // Collect all non-empty text nodes.
-            let mut texts: Vec<String> = Vec::new();
-            collect_strings(doc, self.id, &mut texts);
-            if texts.len() == 1 {
-                Some(texts.remove(0))
+            // Exactly one non-empty text node → that text; otherwise None.
+            let mut only: Option<&str> = None;
+            let mut count = 0usize;
+            for_each_string(doc, self.id, &mut |t| {
+                count += 1;
+                only = Some(t);
+            });
+            if count == 1 {
+                only.map(str::to_owned)
             } else {
                 None
             }
@@ -358,7 +386,7 @@ impl PyTag {
     fn strings(&self, py: Python) -> Py<PyAny> {
         let v: Vec<String> = self.read_doc(|doc| {
             let mut out = Vec::new();
-            collect_strings(doc, self.id, &mut out);
+            for_each_string(doc, self.id, &mut |t| out.push(t.to_owned()));
             out
         });
         v.into_pyobject(py).unwrap().into_any().unbind()
@@ -370,11 +398,13 @@ impl PyTag {
     fn stripped_strings(&self, py: Python) -> Py<PyAny> {
         let v: Vec<String> = self.read_doc(|doc| {
             let mut out = Vec::new();
-            collect_strings(doc, self.id, &mut out);
-            out.into_iter()
-                .map(|s| s.trim().to_owned())
-                .filter(|s| !s.is_empty())
-                .collect()
+            for_each_string(doc, self.id, &mut |t| {
+                let t = t.trim();
+                if !t.is_empty() {
+                    out.push(t.to_owned());
+                }
+            });
+            out
         });
         v.into_pyobject(py).unwrap().into_any().unbind()
     }
@@ -383,13 +413,21 @@ impl PyTag {
     #[pyo3(signature = (separator="", strip=false))]
     fn get_text(&self, separator: &str, strip: bool) -> String {
         self.read_doc(|doc| {
-            let mut texts = Vec::new();
-            collect_strings(doc, self.id, &mut texts);
-            if strip {
-                texts.iter_mut().for_each(|s| *s = s.trim().to_owned());
-                texts.retain(|s| !s.is_empty());
-            }
-            texts.join(separator)
+            // Append straight into one buffer; no per-node String clones.
+            let mut out = String::new();
+            let mut first = true;
+            for_each_string(doc, self.id, &mut |t| {
+                let t = if strip { t.trim() } else { t };
+                if strip && t.is_empty() {
+                    return;
+                }
+                if !first {
+                    out.push_str(separator);
+                }
+                first = false;
+                out.push_str(t);
+            });
+            out
         })
     }
 
@@ -590,9 +628,10 @@ impl PyTag {
 
     // ── CSS selectors ─────────────────────────────────────────────────────────
 
-    fn select(&self, css: &str) -> PyResult<Vec<PyTag>> {
+    #[pyo3(signature = (css, limit=0))]
+    fn select(&self, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
         let ids = self
-            .read_doc(|doc| select(doc, self.id, css))
+            .read_doc(|doc| select_limit(doc, self.id, css, limit))
             .map_err(PyValueError::new_err)?;
         Ok(ids.into_iter().map(|i| self.wrap_id(i)).collect())
     }
@@ -1036,8 +1075,14 @@ impl PyDocument {
         self.find_all(name, attrs, recursive, string, limit, kwargs)
     }
 
-    fn select(&self, css: &str) -> PyResult<Vec<PyTag>> {
-        self.root_tag().select(css)
+    #[pyo3(signature = (css, limit=0))]
+    fn select(&self, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
+        self.root_tag().select(css, limit)
+    }
+
+    #[pyo3(signature = (value=None, limit=0))]
+    fn find_strings(&self, value: Option<&str>, limit: usize) -> Vec<PyTag> {
+        self.root_tag().find_strings(value, limit)
     }
 
     fn select_one(&self, css: &str) -> PyResult<Option<PyTag>> {
@@ -1150,26 +1195,32 @@ impl PyDocument {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn collect_strings(doc: &Document, node: NodeId, out: &mut Vec<String>) {
+/// Visit every non-empty text node under `node` in document order, skipping
+/// comments and `<script>`/`<style>` content (BS4 behaviour).
+fn for_each_string<'d>(doc: &'d Document, node: NodeId, f: &mut impl FnMut(&'d str)) {
     match &doc.get(node).data {
-        NodeData::Text(t) if !t.is_empty() => out.push(t.clone()),
+        NodeData::Text(t) if !t.is_empty() => f(t),
         NodeData::Comment(_) => {} // skip comments
         NodeData::Element { name, .. } if matches!(name.local.as_ref(), "script" | "style") => {} // skip like BS4
         _ => {
             for child in doc.children_ids(node) {
-                collect_strings(doc, child, out);
+                for_each_string(doc, child, f);
             }
         }
     }
 }
 
-fn collect_string_nodes(doc: &Document, node: NodeId, out: &mut Vec<NodeId>) {
+/// Collect up to `max` non-empty text node ids under `node`.
+fn collect_string_nodes(doc: &Document, node: NodeId, out: &mut Vec<NodeId>, max: usize) {
     match &doc.get(node).data {
         NodeData::Text(t) if !t.is_empty() => out.push(node),
         NodeData::Comment(_) => {}
         _ => {
             for child in doc.children_ids(node) {
-                collect_string_nodes(doc, child, out);
+                if out.len() >= max {
+                    return;
+                }
+                collect_string_nodes(doc, child, out, max);
             }
         }
     }

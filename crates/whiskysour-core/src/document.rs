@@ -251,8 +251,7 @@ impl Document {
             NodeData::Text(t) => buf.push_str(t),
             _ => {
                 // Recurse into all children (includes Element, Script, Style, etc.)
-                let children: Vec<NodeId> = self.children_ids(node).collect();
-                for child in children {
+                for child in self.children_ids(node) {
                     self.collect_text(child, buf);
                 }
             }

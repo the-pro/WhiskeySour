@@ -11,7 +11,7 @@
 
 use crate::document::Document;
 use crate::node::NodeId;
-use crate::selector::{matches_selector_group, parse_selector};
+use crate::selector::{matches_group, parse_selector_cached, MatchContext};
 use crate::traversal::DescendantsPreOrder;
 
 // ── Filter types (Rust-side) ──────────────────────────────────────────────────
@@ -111,17 +111,31 @@ pub fn find_one(doc: &Document, root: NodeId, opts: &FindOptions) -> Option<Node
 
 /// CSS `select()` — returns all elements matching the selector under `root`.
 pub fn select(doc: &Document, root: NodeId, css: &str) -> Result<Vec<NodeId>, String> {
-    let group = parse_selector(css).map_err(|e| e.0)?;
+    select_limit(doc, root, css, 0)
+}
+
+/// CSS `select()` that stops after `limit` matches (0 = unlimited).
+pub fn select_limit(
+    doc: &Document,
+    root: NodeId,
+    css: &str,
+    limit: usize,
+) -> Result<Vec<NodeId>, String> {
+    let group = parse_selector_cached(css).map_err(|e| e.0)?;
+    let ctx = MatchContext::default();
+    let limit = if limit == 0 { usize::MAX } else { limit };
     Ok(DescendantsPreOrder::new(doc, root)
-        .filter(|&id| doc.get(id).data.is_element() && matches_selector_group(doc, id, &group))
+        .filter(|&id| doc.get(id).data.is_element() && matches_group(doc, id, &group, &ctx))
+        .take(limit)
         .collect())
 }
 
 /// CSS `select_one()` — returns the first matching element under `root`.
 pub fn select_one(doc: &Document, root: NodeId, css: &str) -> Result<Option<NodeId>, String> {
-    let group = parse_selector(css).map_err(|e| e.0)?;
+    let group = parse_selector_cached(css).map_err(|e| e.0)?;
+    let ctx = MatchContext::default();
     Ok(DescendantsPreOrder::new(doc, root)
-        .find(|&id| doc.get(id).data.is_element() && matches_selector_group(doc, id, &group)))
+        .find(|&id| doc.get(id).data.is_element() && matches_group(doc, id, &group, &ctx)))
 }
 
 // ── Node-level matching ───────────────────────────────────────────────────────

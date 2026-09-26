@@ -121,7 +121,7 @@ fn write_children(doc: &Document, node: NodeId, buf: &mut String) {
 // ── Pretty printer ────────────────────────────────────────────────────────────
 
 fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw: usize) {
-    let indent = " ".repeat(depth * iw);
+    let indent = Indent(depth * iw);
 
     match &doc.get(node).data {
         NodeData::Document => {
@@ -131,14 +131,14 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
         }
 
         NodeData::Doctype { name, .. } => {
-            buf.push_str(&indent);
+            indent.write(buf);
             buf.push_str("<!DOCTYPE ");
             buf.push_str(name);
             buf.push_str(">\n");
         }
 
         NodeData::Comment(text) => {
-            buf.push_str(&indent);
+            indent.write(buf);
             buf.push_str("<!--");
             buf.push_str(text);
             buf.push_str("-->\n");
@@ -147,7 +147,7 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
         NodeData::Text(text) => {
             let trimmed = text.trim();
             if !trimmed.is_empty() {
-                buf.push_str(&indent);
+                indent.write(buf);
                 escape_text(trimmed, buf);
                 buf.push('\n');
             }
@@ -155,7 +155,7 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
 
         NodeData::Element { name, attrs, .. } => {
             let tag = name.local.as_ref();
-            buf.push_str(&indent);
+            indent.write(buf);
             buf.push('<');
             buf.push_str(tag);
             for attr in attrs.iter() {
@@ -171,23 +171,26 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
             } else {
                 let raw = RAW_TEXT.contains(&tag);
                 // Inline if single text child and not raw-text element.
-                let children: Vec<NodeId> = doc.children_ids(node).collect();
-                let inline = !raw
-                    && children.len() == 1
-                    && matches!(doc.get(children[0]).data, NodeData::Text(_));
+                let n = doc.get(node);
+                let inline_child = match n.first_child {
+                    Some(c) if !raw && n.first_child == n.last_child => {
+                        matches!(doc.get(c).data, NodeData::Text(_)).then_some(c)
+                    }
+                    _ => None,
+                };
 
-                if inline {
+                if let Some(child) = inline_child {
                     buf.push('>');
-                    write_node(doc, children[0], buf);
+                    write_node(doc, child, buf);
                     buf.push_str("</");
                     buf.push_str(tag);
                     buf.push_str(">\n");
                 } else {
                     buf.push_str(">\n");
-                    for child in &children {
-                        write_pretty(doc, *child, buf, depth + 1, iw);
+                    for child in doc.children_ids(node) {
+                        write_pretty(doc, child, buf, depth + 1, iw);
                     }
-                    buf.push_str(&indent);
+                    indent.write(buf);
                     buf.push_str("</");
                     buf.push_str(tag);
                     buf.push_str(">\n");
@@ -199,25 +202,48 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
     }
 }
 
-// ── Escaping ──────────────────────────────────────────────────────────────────
+/// `depth * indent_width` spaces, written without allocating.
+#[derive(Clone, Copy)]
+struct Indent(usize);
 
-fn escape_text(s: &str, buf: &mut String) {
-    for c in s.chars() {
-        match c {
-            '&' => buf.push_str("&amp;"),
-            '<' => buf.push_str("&lt;"),
-            '>' => buf.push_str("&gt;"),
-            _ => buf.push(c),
-        }
+impl Indent {
+    #[inline]
+    fn write(self, buf: &mut String) {
+        buf.extend(std::iter::repeat_n(' ', self.0));
     }
 }
 
+// ── Escaping ──────────────────────────────────────────────────────────────────
+
+fn escape_text(s: &str, buf: &mut String) {
+    escape_into(s, buf, |b| match b {
+        b'&' => Some("&amp;"),
+        b'<' => Some("&lt;"),
+        b'>' => Some("&gt;"),
+        _ => None,
+    });
+}
+
 fn escape_attr(s: &str, buf: &mut String) {
-    for c in s.chars() {
-        match c {
-            '&' => buf.push_str("&amp;"),
-            '"' => buf.push_str("&quot;"),
-            _ => buf.push(c),
+    escape_into(s, buf, |b| match b {
+        b'&' => Some("&amp;"),
+        b'"' => Some("&quot;"),
+        _ => None,
+    });
+}
+
+/// Copy `s` into `buf`, replacing bytes that `entity` maps to an escape.
+/// Unescaped runs are copied with a single `push_str` rather than per char.
+#[inline]
+fn escape_into(s: &str, buf: &mut String, entity: impl Fn(u8) -> Option<&'static str>) {
+    let mut start = 0;
+    for (i, &b) in s.as_bytes().iter().enumerate() {
+        if let Some(rep) = entity(b) {
+            // `b` is ASCII, so `start..i` and `i + 1..` are char boundaries.
+            buf.push_str(&s[start..i]);
+            buf.push_str(rep);
+            start = i + 1;
         }
     }
+    buf.push_str(&s[start..]);
 }
