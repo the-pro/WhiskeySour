@@ -548,3 +548,40 @@ class TestSubtreeTraversalBounds:
         first, second = soup.find_all("p")
         assert first.string == "only"
         assert second.string is None
+
+
+class TestNodeKindWrapping:
+    """Children/descendants are wrapped from pre-classified Rust items."""
+
+    HTML = "<!DOCTYPE html><html><body><p>t<!--c--><b>x</b></p></body></html>"
+
+    def test_contents_classes_and_values(self, parse, ws):
+        soup = parse(self.HTML)
+        doctype = soup.contents[0]
+        assert isinstance(doctype, ws.Doctype) and str(doctype) == "html"
+        p = soup.find("p")
+        kids = p.contents
+        assert isinstance(kids[0], ws.NavigableString) and str(kids[0]) == "t"
+        assert isinstance(kids[1], ws.Comment) and str(kids[1]) == "c"
+        assert kids[2].name == "b"
+
+    def test_descendants_kinds_and_parents(self, parse, ws):
+        soup = parse(self.HTML)
+        p = soup.find("p")
+        items = list(p.descendants)
+        assert [type(i).__name__ for i in items] == ["NavigableString", "Comment", "Tag", "NavigableString"]
+        assert items[0].parent.name == "p"
+        assert items[3].parent.name == "b"
+        assert items[0].name is None and items[1].name is None
+
+    def test_children_matches_contents(self, parse):
+        soup = parse(self.HTML)
+        p = soup.find("p")
+        assert [str(c) for c in p.children] == [str(c) for c in p.contents]
+
+    def test_strings_have_navigation(self, parse):
+        soup = parse(self.HTML)
+        strings = list(soup.find("p").strings)
+        assert [str(s) for s in strings] == ["t", "x"]
+        assert strings[1].parent.name == "b"
+        assert strings[0].next_sibling is not None

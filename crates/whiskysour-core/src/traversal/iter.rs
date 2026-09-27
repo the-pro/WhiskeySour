@@ -16,7 +16,7 @@ impl<'a> AncestorsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
         AncestorsIter {
             doc,
-            current: doc.get(start).parent,
+            current: doc.get(start).parent(),
         }
     }
 }
@@ -25,7 +25,7 @@ impl<'a> Iterator for AncestorsIter<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<NodeId> {
         let id = self.current?;
-        self.current = self.doc.get(id).parent;
+        self.current = self.doc.get(id).parent();
         Some(id)
     }
 }
@@ -48,7 +48,7 @@ impl<'a> DescendantsPreOrder<'a> {
         DescendantsPreOrder {
             doc,
             root,
-            next: doc.get(root).first_child,
+            next: doc.get(root).first_child(),
         }
     }
 }
@@ -58,16 +58,16 @@ impl<'a> Iterator for DescendantsPreOrder<'a> {
     fn next(&mut self) -> Option<NodeId> {
         let id = self.next?;
         let node = self.doc.get(id);
-        self.next = node.first_child.or_else(|| {
+        self.next = node.first_child().or_else(|| {
             // No children: take the nearest following sibling of `id` or of
             // one of its ancestors, without climbing past `root`.
             let mut cur = id;
             loop {
                 let n = self.doc.get(cur);
-                if let Some(sib) = n.next_sibling {
+                if let Some(sib) = n.next_sibling() {
                     break Some(sib);
                 }
-                match n.parent {
+                match n.parent() {
                     Some(p) if p != self.root => cur = p,
                     _ => break None,
                 }
@@ -118,7 +118,7 @@ impl<'a> NextSiblingsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
         NextSiblingsIter {
             doc,
-            next: doc.get(start).next_sibling,
+            next: doc.get(start).next_sibling(),
         }
     }
 }
@@ -127,7 +127,7 @@ impl<'a> Iterator for NextSiblingsIter<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<NodeId> {
         let id = self.next?;
-        self.next = self.doc.get(id).next_sibling;
+        self.next = self.doc.get(id).next_sibling();
         Some(id)
     }
 }
@@ -145,7 +145,7 @@ impl<'a> PrevSiblingsIter<'a> {
     pub fn new(doc: &'a Document, start: NodeId) -> Self {
         PrevSiblingsIter {
             doc,
-            prev: doc.get(start).prev_sibling,
+            prev: doc.get(start).prev_sibling(),
         }
     }
 }
@@ -154,7 +154,7 @@ impl<'a> Iterator for PrevSiblingsIter<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<NodeId> {
         let id = self.prev?;
-        self.prev = self.doc.get(id).prev_sibling;
+        self.prev = self.doc.get(id).prev_sibling();
         Some(id)
     }
 }
@@ -173,13 +173,13 @@ impl<'a> NextElementsIter<'a> {
         // start at the first child, or next sibling, or parent's next sibling
         let next = doc
             .get(start)
-            .first_child
-            .or_else(|| doc.get(start).next_sibling)
+            .first_child()
+            .or_else(|| doc.get(start).next_sibling())
             .or_else(|| {
                 let mut cur = start;
                 loop {
-                    match doc.get(cur).parent {
-                        Some(p) => match doc.get(p).next_sibling {
+                    match doc.get(cur).parent() {
+                        Some(p) => match doc.get(p).next_sibling() {
                             Some(n) => break Some(n),
                             None => cur = p,
                         },
@@ -199,13 +199,13 @@ impl<'a> Iterator for NextElementsIter<'a> {
         self.next = self
             .doc
             .get(id)
-            .first_child
-            .or_else(|| self.doc.get(id).next_sibling)
+            .first_child()
+            .or_else(|| self.doc.get(id).next_sibling())
             .or_else(|| {
                 let mut cur = id;
                 loop {
-                    match self.doc.get(cur).parent {
-                        Some(p) => match self.doc.get(p).next_sibling {
+                    match self.doc.get(cur).parent() {
+                        Some(p) => match self.doc.get(p).next_sibling() {
                             Some(n) => break Some(n),
                             None => cur = p,
                         },
@@ -223,7 +223,7 @@ impl<'a> Iterator for NextElementsIter<'a> {
 
 /// Return the 1-based index of `node` among its element siblings (of the same type if `same_type` is set).
 pub fn child_index(doc: &Document, node: NodeId, same_type: bool) -> usize {
-    if doc.get(node).parent.is_none() {
+    if doc.get(node).parent().is_none() {
         return 1;
     }
     1 + PrevSiblingsIter::new(doc, node)
@@ -233,7 +233,7 @@ pub fn child_index(doc: &Document, node: NodeId, same_type: bool) -> usize {
 
 /// Return the 1-based index from the END among element siblings.
 pub fn child_index_from_end(doc: &Document, node: NodeId, same_type: bool) -> usize {
-    if doc.get(node).parent.is_none() {
+    if doc.get(node).parent().is_none() {
         return 1;
     }
     1 + NextSiblingsIter::new(doc, node)
@@ -245,8 +245,9 @@ pub fn child_index_from_end(doc: &Document, node: NodeId, same_type: bool) -> us
 #[inline]
 fn sibling_counts(doc: &Document, node: NodeId, sib: NodeId, same_type: bool) -> bool {
     match (&doc.get(sib).data, same_type) {
-        (NodeData::Element { .. }, false) => true,
-        (NodeData::Element { name, .. }, true) => {
+        (NodeData::Element(_), false) => true,
+        (NodeData::Element(e), true) => {
+            let name = &e.name;
             doc.get(node).data.qual_name().map(|q| &q.local) == Some(&name.local)
         }
         _ => false,

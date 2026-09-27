@@ -8,6 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
+use markup5ever::{local_name, LocalName};
 use smallvec::SmallVec;
 
 use crate::document::Document;
@@ -72,8 +73,8 @@ impl MatchContext {
         if let Some(&idx) = self.nth.borrow().get(&(node, kind)) {
             return idx as usize;
         }
-        let local = match &doc.get(node).data {
-            NodeData::Element { name, .. } => &name.local,
+        let local = match doc.get(node).data.qual_name() {
+            Some(name) => &name.local,
             // Selectors only test elements, but stay correct for anything else.
             _ if from_end => return child_index_from_end(doc, node, same_type),
             _ => return child_index(doc, node, same_type),
@@ -82,9 +83,9 @@ impl MatchContext {
         let step = |id: NodeId| {
             let n = doc.get(id);
             if from_end {
-                n.next_sibling
+                n.next_sibling()
             } else {
-                n.prev_sibling
+                n.prev_sibling()
             }
         };
 
@@ -95,7 +96,7 @@ impl MatchContext {
         let mut base = 0u32;
         let mut cur = step(node);
         while let Some(id) = cur {
-            if let NodeData::Element { name, .. } = &doc.get(id).data {
+            if let Some(name) = doc.get(id).data.qual_name() {
                 if !same_type || name.local == *local {
                     if let Some(&idx) = map.get(&(id, kind)) {
                         base = idx;
@@ -162,7 +163,7 @@ fn match_steps(
         Combinator::None => true,
         Combinator::Descendant => {
             // Node must have an ancestor matching the previous chain.
-            let mut cur = doc.get(node).parent;
+            let mut cur = doc.get(node).parent();
             while let Some(p) = cur {
                 if matches!(doc.get(p).data, NodeData::Document) {
                     break;
@@ -171,33 +172,33 @@ fn match_steps(
                 if match_steps(doc, p, steps, upto - 1, ctx) {
                     return true;
                 }
-                cur = doc.get(p).parent;
+                cur = doc.get(p).parent();
             }
             false
         }
-        Combinator::Child => match doc.get(node).parent {
+        Combinator::Child => match doc.get(node).parent() {
             Some(p) if !matches!(doc.get(p).data, NodeData::Document) => {
                 match_steps(doc, p, steps, upto - 1, ctx)
             }
             _ => false,
         },
         Combinator::Adjacent => {
-            let mut prev = doc.get(node).prev_sibling;
+            let mut prev = doc.get(node).prev_sibling();
             while let Some(sib) = prev {
                 if doc.get(sib).data.is_element() {
                     return match_steps(doc, sib, steps, upto - 1, ctx);
                 }
-                prev = doc.get(sib).prev_sibling;
+                prev = doc.get(sib).prev_sibling();
             }
             false
         }
         Combinator::Sibling => {
-            let mut prev = doc.get(node).prev_sibling;
+            let mut prev = doc.get(node).prev_sibling();
             while let Some(sib) = prev {
                 if doc.get(sib).data.is_element() && match_steps(doc, sib, steps, upto - 1, ctx) {
                     return true;
                 }
-                prev = doc.get(sib).prev_sibling;
+                prev = doc.get(sib).prev_sibling();
             }
             false
         }
@@ -232,7 +233,7 @@ fn matches_simple(
 
         SimpleSelector::Class(cls) => matches_class(doc, node, cls),
 
-        SimpleSelector::Id(id) => doc.get_attr(node, "id") == Some(id.as_str()),
+        SimpleSelector::Id(id) => attr_by_atom(doc, node, &local_name!("id")) == Some(id.as_str()),
 
         SimpleSelector::Attribute(attr_sel) => matches_attribute(doc, node, attr_sel),
 
@@ -243,10 +244,22 @@ fn matches_simple(
 // ── Class matching (space-separated token list) ───────────────────────────────
 
 fn matches_class(doc: &Document, node: NodeId, cls: &str) -> bool {
-    match doc.get_attr(node, "class") {
+    match attr_by_atom(doc, node, &local_name!("class")) {
         Some(class_val) => class_val.split_ascii_whitespace().any(|t| t == cls),
         None => false,
     }
+}
+
+/// Attribute lookup by interned name: an atom compare per attribute instead of
+/// a string compare.
+#[inline]
+fn attr_by_atom<'d>(doc: &'d Document, node: NodeId, name: &LocalName) -> Option<&'d str> {
+    doc.get(node)
+        .data
+        .attrs()?
+        .iter()
+        .find(|a| a.name.local == *name)
+        .map(|a| a.value.as_str())
 }
 
 // ── Attribute selector matching ───────────────────────────────────────────────
@@ -297,7 +310,7 @@ fn matches_pseudo(doc: &Document, node: NodeId, pseudo: &PseudoClass, ctx: &Matc
     match pseudo {
         PseudoClass::Root => {
             // The <html> element is the root.
-            matches!(doc.get(node).parent, Some(p) if matches!(doc.get(p).data, NodeData::Document))
+            matches!(doc.get(node).parent(), Some(p) if matches!(doc.get(p).data, NodeData::Document))
         }
 
         PseudoClass::Empty => !doc.children_ids(node).any(|c| {

@@ -297,7 +297,7 @@ class CompiledSelector:
     A pre-compiled CSS selector that can be applied to any Tag or WhiskeySour document.
 
     Obtain via ``soup.compile("div.item > a")`` then reuse across many documents.
-    The underlying Rust selector engine caches the compiled DFA, so repeated calls
+    The Rust selector engine caches parsed selectors (per thread), so repeated calls
     pay only the traversal cost — no re-parsing of the selector string.
     """
 
@@ -377,8 +377,7 @@ class Tag:
         node = self._rust.string_node
         if node is None:
             return None
-        text = node.text_content or ""
-        ns = NavigableString(text, rust_tag=node)
+        ns = _new_string(NavigableString, node.text_content or "", node)
         ns._parent_ref = self  # parent is self (this Tag)
         return ns
 
@@ -388,10 +387,8 @@ class Tag:
 
     @property
     def strings(self) -> Iterator[NavigableString]:
-        for node in self._rust.text_nodes():
-            text = node.text_content or ""
-            ns = NavigableString(text, rust_tag=node)
-            yield ns
+        for _, text, node in self._rust.text_node_items():
+            yield _new_string(NavigableString, text, node)
 
     @property
     def stripped_strings(self) -> Iterator[str]:
@@ -418,15 +415,15 @@ class Tag:
 
     @property
     def contents(self) -> List[Any]:
-        return [_wrap(c) for c in self._rust.contents]
+        return [_wrap_item(c) for c in self._rust.contents_items]
 
     @property
     def children(self) -> Iterator[Any]:
-        return (_wrap(c) for c in self._rust.children)
+        return (_wrap_item(c) for c in self._rust.contents_items)
 
     @property
     def descendants(self) -> Iterator[Any]:
-        return (_wrap(d) for d in self._rust.descendants)
+        return (_wrap_item(d) for d in self._rust.descendants_items)
 
     @property
     def next_sibling(self) -> Optional[Any]:
@@ -466,7 +463,12 @@ class Tag:
         string: Any = None,
         **kwargs: Any,
     ) -> Optional["Tag"]:
-        attrs = {**attrs, **kwargs}
+        if kwargs or type(attrs) is not dict:
+            attrs = {**attrs, **kwargs}
+        if (string is None or name is not None or attrs) and not _needs_python_filter(name, attrs, string):
+            # Plain filters: one Rust call, no intermediate result list.
+            r = self._rust.find(name, attrs, recursive, string)
+            return Tag(r) if r is not None else None
         result = self._find_impl(name, attrs, string, recursive, limit=1)
         return result[0] if result else None
 
@@ -815,11 +817,11 @@ class WhiskeySour:
 
     @property
     def contents(self) -> List[Any]:
-        return [_wrap(c) for c in self._rust.contents]
+        return [_wrap_item(c) for c in self._rust.contents_items]
 
     @property
     def children(self) -> Iterator[Any]:
-        return (_wrap(c) for c in self._rust.contents)
+        return (_wrap_item(c) for c in self._rust.contents_items)
 
     def get_text(self, separator: str = "", strip: bool = False) -> str:
         return self._rust.get_text(separator, strip)
@@ -855,7 +857,12 @@ class WhiskeySour:
         string: Any = None,
         **kwargs: Any,
     ) -> Optional[Tag]:
-        attrs = {**attrs, **kwargs}
+        if kwargs or type(attrs) is not dict:
+            attrs = {**attrs, **kwargs}
+        if (string is None or name is not None or attrs) and not _needs_python_filter(name, attrs, string):
+            # Plain filters: one Rust call, no intermediate result list.
+            r = self._rust.find(name, attrs, recursive, string)
+            return Tag(r) if r is not None else None
         result = self._find_impl(name, attrs, string, recursive, limit=1)
         return result[0] if result else None
 
@@ -1088,6 +1095,38 @@ _NODE_TYPE_CLS = {
 }
 
 
+_str_new = str.__new__
+
+
+def _new_string(cls: type, text: str, rust_tag: Any) -> NavigableString:
+    """Build a NavigableString (or subclass) without the Python-level ``__new__``.
+
+    Equivalent to ``cls(text, rust_tag=rust_tag)`` but ~2× cheaper, which matters
+    when wrapping every node of ``.descendants`` / ``.strings``.
+    """
+    s = _str_new(cls, text)
+    s._rust = rust_tag
+    s._parent_ref = None
+    return s
+
+
+# Indexed by the item kind codes produced by the Rust `node_items` helper
+# (0 text, 1 comment, 2 CDATA, 3 doctype, 4 processing instruction; 5 = document).
+_ITEM_CLASSES = (NavigableString, Comment, CData, Doctype, ProcessingInstruction)
+_DOCUMENT_KIND = 5
+
+
+def _wrap_item(item: Any) -> Any:
+    """Wrap one entry of a Rust ``*_items`` list: a bare ``_Tag`` for elements,
+    otherwise a ``(kind, text, _Tag)`` tuple."""
+    if type(item) is _RustTag:
+        return Tag(item)
+    kind, text, rust_tag = item
+    if kind == _DOCUMENT_KIND:
+        return _DocumentWrapper()
+    return _new_string(_ITEM_CLASSES[kind], text, rust_tag)
+
+
 def _wrap(rust_obj: Any) -> Any:
     """Wrap a Rust object returned by the core in the appropriate Python wrapper."""
     if rust_obj is None:
@@ -1099,9 +1138,7 @@ def _wrap(rust_obj: Any) -> Any:
         if nt == "document":
             return _DocumentWrapper()
         cls = _NODE_TYPE_CLS.get(nt, NavigableString)
-        text = rust_obj.text_content or ""
-        ns = cls(text, rust_tag=rust_obj)
-        return ns
+        return _new_string(cls, rust_obj.text_content or "", rust_obj)
     # Strings are returned as plain Python str from Rust (fallback)
     if isinstance(rust_obj, str):
         return NavigableString(rust_obj)

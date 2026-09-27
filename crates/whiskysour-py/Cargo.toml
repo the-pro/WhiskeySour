@@ -11,6 +11,5 @@ crate-type = ["cdylib"]
 whiskysour-core = { path = "../whiskysour-core" }
 pyo3            = { version = "0.28", features = ["extension-module", "abi3-py39", "generate-import-lib", "py-clone"] }
 markup5ever     = "0.12"
-smallvec        = { version = "1.13", features = ["union"] }
 
 [build-dependencies]

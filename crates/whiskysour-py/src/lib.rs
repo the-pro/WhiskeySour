@@ -12,9 +12,8 @@ use std::sync::{Arc, RwLock};
 use markup5ever::{namespace_url, LocalName, Namespace, QualName};
 use pyo3::exceptions::{PyKeyError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBool, PyBytes, PyDict, PyList};
+use pyo3::types::{PyBool, PyBytes, PyDict, PyList, PyString, PyTuple};
 use pyo3::IntoPyObject;
-use smallvec::SmallVec;
 
 use whiskysour_core::{
     document::Document,
@@ -34,6 +33,14 @@ use whiskysour_core::{
 
 type DocHandle = Arc<RwLock<Document>>;
 
+/// Estimated subtree size (in nodes) from which queries release the GIL.
+/// Releasing and re-acquiring it costs a fixed amount per call, which only
+/// pays off once the Rust work is well above that cost.
+const GIL_RELEASE_MIN_NODES: u32 = 4096;
+
+/// A non-element node's item kind and text, as built by `PyTag::node_items`.
+type ItemInfo<'py> = (u8, Option<Bound<'py, PyString>>);
+
 // ── _Tag ─────────────────────────────────────────────────────────────────────
 
 /// A reference to a single node inside a parsed document.
@@ -46,7 +53,7 @@ type DocHandle = Arc<RwLock<Document>>;
 ///   tag.has_attr(key) → bool
 ///   tag.string        → str | None
 ///   tag.get_text()    → str
-///   tag.parent        → _Tag | None
+///   tag.parent()        → _Tag | None
 ///   tag.children      → list[_Tag]  (all child nodes)
 ///   tag.contents      → list[_Tag]
 ///   tag.find(...)     → _Tag | None
@@ -146,6 +153,65 @@ impl PyTag {
             filters.push(AttrFilter { name, value: vf });
         }
         Ok(())
+    }
+
+    /// Build the Python "items" for `ids` in one pass: an element becomes its
+    /// `_Tag`; any other node becomes `(kind, text, _Tag)` with `kind` from
+    /// [`item_kind`]. Lets the shim wrap nodes without calling back into Rust
+    /// for `node_type` and `text_content` on every node.
+    fn node_items(
+        &self,
+        py: Python<'_>,
+        ids: impl FnOnce(&Document) -> Vec<NodeId>,
+    ) -> PyResult<Py<PyList>> {
+        // Read the tree under the lock, creating only `str` objects there: they
+        // are not GC-tracked, so no Python code can run while the lock is held.
+        let raw: Vec<(NodeId, Option<ItemInfo<'_>>)> = self.read_doc(|doc| {
+            ids(doc)
+                .into_iter()
+                .map(|id| {
+                    let info = item_kind(&doc.get(id).data)
+                        .map(|(kind, text)| (kind, text.map(|t| PyString::new(py, t))));
+                    (id, info)
+                })
+                .collect()
+        });
+        let list = PyList::empty(py);
+        for (id, info) in raw {
+            let tag = Bound::new(py, self.wrap_id(id))?.into_any();
+            match info {
+                None => list.append(tag)?,
+                Some((kind, text)) => {
+                    let text = match text {
+                        Some(t) => t.into_any(),
+                        None => py.None().into_bound(py),
+                    };
+                    list.append(PyTuple::new(
+                        py,
+                        [kind.into_pyobject(py)?.into_any(), text, tag],
+                    )?)?
+                }
+            }
+        }
+        Ok(list.unbind())
+    }
+
+    /// Like `read_doc`, but releases the GIL while `f` runs when the subtree
+    /// is large enough for that to pay off, so other Python threads can run
+    /// during big queries without taxing small per-element calls.
+    fn read_doc_detached<F, R>(&self, py: Python<'_>, f: F) -> R
+    where
+        F: FnOnce(&Document) -> R + Send,
+        R: Send,
+    {
+        if self.read_doc(|doc| subtree_span(doc, self.id)) >= GIL_RELEASE_MIN_NODES {
+            // Take the lock *inside* the detached section. Holding it while
+            // waiting to re-acquire the GIL could deadlock with a thread that
+            // holds the GIL and is waiting for the write lock.
+            py.detach(|| self.read_doc(f))
+        } else {
+            self.read_doc(f)
+        }
     }
 
     fn read_doc<F, R>(&self, f: F) -> R
@@ -303,7 +369,7 @@ impl PyTag {
 
     // ── String / text ─────────────────────────────────────────────────────────
 
-    /// Returns the single text child _Tag node (for NavigableString.parent/next_element support).
+    /// Returns the single text child _Tag node (for NavigableString.parent()/next_element support).
     #[getter]
     fn string_node(&self) -> Option<PyTag> {
         self.read_doc(|doc| {
@@ -329,19 +395,43 @@ impl PyTag {
         ids.into_iter().map(|i| self.wrap_id(i)).collect()
     }
 
+    /// Like `text_nodes`, as `(kind, text, _Tag)` items (see `node_items`).
+    fn text_node_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let id = self.id;
+        self.node_items(py, |doc| {
+            DescendantsPreOrder::new(doc, id)
+                .filter(|&d| matches!(doc.get(d).data, NodeData::Text(_)))
+                .collect()
+        })
+    }
+
+    /// `.contents` as pre-classified items (see `node_items`).
+    #[getter]
+    fn contents_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let id = self.id;
+        self.node_items(py, |doc| doc.children_ids(id).collect())
+    }
+
+    /// `.descendants` as pre-classified items (see `node_items`).
+    #[getter]
+    fn descendants_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        let id = self.id;
+        self.node_items(py, |doc| DescendantsPreOrder::new(doc, id).collect())
+    }
+
     /// Descendant string-like nodes (text, comment, CDATA, doctype, PI) in
     /// document order. With `value`, only nodes whose text equals it; `limit`
     /// (0 = unlimited) caps the result. Backs `find_all(string=...)`.
     #[pyo3(signature = (value=None, limit=0))]
-    fn find_strings(&self, value: Option<&str>, limit: usize) -> Vec<PyTag> {
+    fn find_strings(&self, py: Python<'_>, value: Option<&str>, limit: usize) -> Vec<PyTag> {
         let limit = if limit == 0 { usize::MAX } else { limit };
-        let ids = self.read_doc(|doc| {
+        let ids = self.read_doc_detached(py, |doc| {
             DescendantsPreOrder::new(doc, self.id)
                 .filter(|&id| {
                     let text = match &doc.get(id).data {
                         NodeData::Text(t) | NodeData::Comment(t) | NodeData::CData(t) => t,
-                        NodeData::Doctype { name, .. } => name,
-                        NodeData::ProcessingInstruction { data, .. } => data,
+                        NodeData::Doctype(d) => &d.name,
+                        NodeData::ProcessingInstruction(pi) => &pi.data,
                         NodeData::Element { .. } | NodeData::Document => return false,
                     };
                     value.is_none_or(|v| v == text)
@@ -411,8 +501,8 @@ impl PyTag {
 
     /// `.get_text(separator="", strip=False)`
     #[pyo3(signature = (separator="", strip=false))]
-    fn get_text(&self, separator: &str, strip: bool) -> String {
-        self.read_doc(|doc| {
+    fn get_text(&self, py: Python<'_>, separator: &str, strip: bool) -> String {
+        self.read_doc_detached(py, |doc| {
             // Append straight into one buffer; no per-node String clones.
             let mut out = String::new();
             let mut first = true;
@@ -454,8 +544,8 @@ impl PyTag {
             NodeData::Text(t) => Some(t.clone()),
             NodeData::Comment(c) => Some(c.clone()),
             NodeData::CData(d) => Some(d.clone()),
-            NodeData::Doctype { name, .. } => Some(name.clone()),
-            NodeData::ProcessingInstruction { data, .. } => Some(data.clone()),
+            NodeData::Doctype(d) => Some(d.name.clone()),
+            NodeData::ProcessingInstruction(pi) => Some(pi.data.clone()),
             _ => None,
         })
     }
@@ -463,7 +553,7 @@ impl PyTag {
     #[getter]
     fn parent(&self) -> Option<PyTag> {
         // Return ALL parents including Document node, so Python can wrap it as [document]
-        self.read_doc(|doc| doc.get(self.id).parent)
+        self.read_doc(|doc| doc.get(self.id).parent())
             .map(|p| self.wrap_id(p))
     }
 
@@ -500,13 +590,13 @@ impl PyTag {
 
     #[getter]
     fn next_sibling(&self) -> Option<PyTag> {
-        self.read_doc(|doc| doc.get(self.id).next_sibling)
+        self.read_doc(|doc| doc.get(self.id).next_sibling())
             .map(|i| self.wrap_id(i))
     }
 
     #[getter]
     fn previous_sibling(&self) -> Option<PyTag> {
-        self.read_doc(|doc| doc.get(self.id).prev_sibling)
+        self.read_doc(|doc| doc.get(self.id).prev_sibling())
             .map(|i| self.wrap_id(i))
     }
 
@@ -529,13 +619,13 @@ impl PyTag {
         self.read_doc(|doc| {
             // DFS: first child, else next sibling, else ancestor's next sibling.
             doc.get(self.id)
-                .first_child
-                .or_else(|| doc.get(self.id).next_sibling)
+                .first_child()
+                .or_else(|| doc.get(self.id).next_sibling())
                 .or_else(|| {
                     let mut cur = self.id;
                     loop {
-                        match doc.get(cur).parent {
-                            Some(p) => match doc.get(p).next_sibling {
+                        match doc.get(cur).parent() {
+                            Some(p) => match doc.get(p).next_sibling() {
                                 Some(n) => break Some(n),
                                 None => cur = p,
                             },
@@ -551,16 +641,16 @@ impl PyTag {
     fn previous_element(&self) -> Option<PyTag> {
         // Previous in DFS order = prev_sibling's last descendant, or parent.
         self.read_doc(|doc| {
-            match doc.get(self.id).prev_sibling {
+            match doc.get(self.id).prev_sibling() {
                 Some(prev) => {
                     // Walk to deepest last-child of prev.
                     let mut cur = prev;
-                    while let Some(lc) = doc.get(cur).last_child {
+                    while let Some(lc) = doc.get(cur).last_child() {
                         cur = lc;
                     }
                     Some(cur)
                 }
-                None => doc.get(self.id).parent,
+                None => doc.get(self.id).parent(),
             }
         })
         .map(|i| self.wrap_id(i))
@@ -571,6 +661,7 @@ impl PyTag {
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, **kwargs))]
     fn find(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
@@ -585,13 +676,16 @@ impl PyTag {
             string,
             kwargs.as_ref(),
         )?;
-        let result = self.read_doc(|doc| find_one(doc, self.id, &opts));
+        let result = self.read_doc_detached(py, |doc| find_one(doc, self.id, &opts));
         Ok(result.map(|i| self.wrap_id(i)))
     }
 
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, limit=0, **kwargs))]
+    // Mirrors BeautifulSoup's find_all() signature, plus the GIL token.
+    #[allow(clippy::too_many_arguments)]
     fn find_all(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
@@ -608,14 +702,17 @@ impl PyTag {
             kwargs.as_ref(),
         )?;
         opts.limit = limit;
-        let ids = self.read_doc(|doc| find_all(doc, self.id, &opts));
+        let ids = self.read_doc_detached(py, |doc| find_all(doc, self.id, &opts));
         Ok(ids.into_iter().map(|i| self.wrap_id(i)).collect())
     }
 
     /// Alias: `tag("p")` == `tag.find_all("p")`.
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, limit=0, **kwargs))]
+    // Mirrors BeautifulSoup's find_all() signature, plus the GIL token.
+    #[allow(clippy::too_many_arguments)]
     fn __call__(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
@@ -623,22 +720,22 @@ impl PyTag {
         limit: usize,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<PyTag>> {
-        self.find_all(name, attrs, recursive, string, limit, kwargs)
+        self.find_all(py, name, attrs, recursive, string, limit, kwargs)
     }
 
     // ── CSS selectors ─────────────────────────────────────────────────────────
 
     #[pyo3(signature = (css, limit=0))]
-    fn select(&self, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
+    fn select(&self, py: Python<'_>, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
         let ids = self
-            .read_doc(|doc| select_limit(doc, self.id, css, limit))
+            .read_doc_detached(py, |doc| select_limit(doc, self.id, css, limit))
             .map_err(PyValueError::new_err)?;
         Ok(ids.into_iter().map(|i| self.wrap_id(i)).collect())
     }
 
-    fn select_one(&self, css: &str) -> PyResult<Option<PyTag>> {
+    fn select_one(&self, py: Python<'_>, css: &str) -> PyResult<Option<PyTag>> {
         let id = self
-            .read_doc(|doc| select_one(doc, self.id, css))
+            .read_doc_detached(py, |doc| select_one(doc, self.id, css))
             .map_err(PyValueError::new_err)?;
         Ok(id.map(|i| self.wrap_id(i)))
     }
@@ -847,38 +944,38 @@ impl PyTag {
 
     // ── Serialisation ─────────────────────────────────────────────────────────
 
-    fn __str__(&self) -> String {
-        self.read_doc(|doc| serialize_node(doc, self.id))
+    fn __str__(&self, py: Python<'_>) -> String {
+        self.read_doc_detached(py, |doc| serialize_node(doc, self.id))
     }
 
-    fn __repr__(&self) -> String {
-        self.__str__()
+    fn __repr__(&self, py: Python<'_>) -> String {
+        self.__str__(py)
     }
 
     #[pyo3(signature = (indent_width=2))]
-    fn prettify(&self, indent_width: usize) -> String {
-        self.read_doc(|doc| prettify_node(doc, self.id, indent_width))
+    fn prettify(&self, py: Python<'_>, indent_width: usize) -> String {
+        self.read_doc_detached(py, |doc| prettify_node(doc, self.id, indent_width))
     }
 
-    fn decode(&self) -> String {
-        self.__str__()
+    fn decode(&self, py: Python<'_>) -> String {
+        self.__str__(py)
     }
 
-    fn decode_contents(&self) -> String {
-        self.read_doc(|doc| serialize_inner(doc, self.id))
+    fn decode_contents(&self, py: Python<'_>) -> String {
+        self.read_doc_detached(py, |doc| serialize_inner(doc, self.id))
     }
 
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> PyResult<Bound<'py, PyBytes>> {
         // Byte encoding is applied by the Python shim; the core always emits UTF-8.
         let _ = encoding;
-        let s = self.__str__();
+        let s = self.__str__(py);
         Ok(PyBytes::new(py, s.as_bytes()))
     }
 
     fn encode_contents<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
         let _ = encoding;
-        PyBytes::new(py, self.decode_contents().as_bytes())
+        PyBytes::new(py, self.decode_contents(py).as_bytes())
     }
 
     // ── Equality / hash ───────────────────────────────────────────────────────
@@ -1039,18 +1136,23 @@ impl PyDocument {
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, **kwargs))]
     fn find(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
         string: Option<&str>,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Option<PyTag>> {
-        self.root_tag().find(name, attrs, recursive, string, kwargs)
+        self.root_tag()
+            .find(py, name, attrs, recursive, string, kwargs)
     }
 
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, limit=0, **kwargs))]
+    // Mirrors BeautifulSoup's find_all() signature, plus the GIL token.
+    #[allow(clippy::too_many_arguments)]
     fn find_all(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
@@ -1059,12 +1161,15 @@ impl PyDocument {
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<PyTag>> {
         self.root_tag()
-            .find_all(name, attrs, recursive, string, limit, kwargs)
+            .find_all(py, name, attrs, recursive, string, limit, kwargs)
     }
 
     #[pyo3(signature = (name=None, attrs=None, recursive=true, string=None, limit=0, **kwargs))]
+    // Mirrors BeautifulSoup's find_all() signature, plus the GIL token.
+    #[allow(clippy::too_many_arguments)]
     fn __call__(
         &self,
+        py: Python<'_>,
         name: Option<Bound<'_, PyAny>>,
         attrs: Option<Bound<'_, PyDict>>,
         recursive: bool,
@@ -1072,21 +1177,21 @@ impl PyDocument {
         limit: usize,
         kwargs: Option<Bound<'_, PyDict>>,
     ) -> PyResult<Vec<PyTag>> {
-        self.find_all(name, attrs, recursive, string, limit, kwargs)
+        self.find_all(py, name, attrs, recursive, string, limit, kwargs)
     }
 
     #[pyo3(signature = (css, limit=0))]
-    fn select(&self, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
-        self.root_tag().select(css, limit)
+    fn select(&self, py: Python<'_>, css: &str, limit: usize) -> PyResult<Vec<PyTag>> {
+        self.root_tag().select(py, css, limit)
     }
 
     #[pyo3(signature = (value=None, limit=0))]
-    fn find_strings(&self, value: Option<&str>, limit: usize) -> Vec<PyTag> {
-        self.root_tag().find_strings(value, limit)
+    fn find_strings(&self, py: Python<'_>, value: Option<&str>, limit: usize) -> Vec<PyTag> {
+        self.root_tag().find_strings(py, value, limit)
     }
 
-    fn select_one(&self, css: &str) -> PyResult<Option<PyTag>> {
-        self.root_tag().select_one(css)
+    fn select_one(&self, py: Python<'_>, css: &str) -> PyResult<Option<PyTag>> {
+        self.root_tag().select_one(py, css)
     }
 
     // ── Tree access (doc acts as a tag for navigation purposes) ───────────────
@@ -1096,9 +1201,19 @@ impl PyDocument {
         self.root_tag().contents(py)
     }
 
+    #[getter]
+    fn contents_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        self.root_tag().contents_items(py)
+    }
+
+    #[getter]
+    fn descendants_items(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        self.root_tag().descendants_items(py)
+    }
+
     #[pyo3(signature = (separator="", strip=false))]
-    fn get_text(&self, separator: &str, strip: bool) -> String {
-        self.root_tag().get_text(separator, strip)
+    fn get_text(&self, py: Python<'_>, separator: &str, strip: bool) -> String {
+        self.root_tag().get_text(py, separator, strip)
     }
 
     /// All descendants of the document (all nodes including text/comment).
@@ -1117,7 +1232,7 @@ impl PyDocument {
 
     #[pyo3(signature = (name, **kwargs))]
     fn new_tag(&self, name: &str, kwargs: Option<Bound<'_, PyDict>>) -> PyResult<PyTag> {
-        let mut attrs: SmallVec<[Attr; 4]> = SmallVec::new();
+        let mut attrs: Vec<Attr> = Vec::new();
         if let Some(kw) = kwargs {
             for (k, v) in kw.iter() {
                 let key: String = k.extract()?;
@@ -1132,12 +1247,7 @@ impl PyDocument {
             }
         }
         let qname = QualName::new(None, markup5ever::ns!(html), LocalName::from(name));
-        let data = NodeData::Element {
-            name: qname,
-            attrs,
-            self_closing: false,
-            is_template: false,
-        };
+        let data = NodeData::element(qname, attrs, false, false);
         let id = self
             .doc
             .write()
@@ -1157,33 +1267,27 @@ impl PyDocument {
 
     // ── Serialisation ─────────────────────────────────────────────────────────
 
-    fn __str__(&self) -> String {
-        self.doc
-            .read()
-            .map(|doc| serialize_node(&doc, DOCUMENT_ID))
-            .unwrap_or_default()
+    fn __str__(&self, py: Python<'_>) -> String {
+        self.root_tag().__str__(py)
     }
 
-    fn __repr__(&self) -> String {
-        self.__str__()
+    fn __repr__(&self, py: Python<'_>) -> String {
+        self.__str__(py)
     }
 
     #[pyo3(signature = (indent_width=2))]
-    fn prettify(&self, indent_width: usize) -> String {
-        self.doc
-            .read()
-            .map(|doc| prettify_node(&doc, DOCUMENT_ID, indent_width))
-            .unwrap_or_default()
+    fn prettify(&self, py: Python<'_>, indent_width: usize) -> String {
+        self.root_tag().prettify(py, indent_width)
     }
 
-    fn decode(&self) -> String {
-        self.__str__()
+    fn decode(&self, py: Python<'_>) -> String {
+        self.__str__(py)
     }
 
     #[pyo3(signature = (encoding="utf-8"))]
     fn encode<'py>(&self, py: Python<'py>, encoding: &str) -> Bound<'py, PyBytes> {
         let _ = encoding;
-        PyBytes::new(py, self.__str__().as_bytes())
+        PyBytes::new(py, self.__str__(py).as_bytes())
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -1195,13 +1299,51 @@ impl PyDocument {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
+/// Cheap estimate of the number of nodes in `node`'s subtree, used to decide
+/// whether a query is worth releasing the GIL for. The parser allocates ids in
+/// document order, so a subtree spans the ids up to the next node after it.
+/// Mutation can break that ordering; the estimate then only affects whether
+/// the GIL is released, never the result.
+fn subtree_span(doc: &Document, node: NodeId) -> u32 {
+    let mut cur = node;
+    loop {
+        let n = doc.get(cur);
+        if let Some(next) = n.next_sibling() {
+            return next.saturating_sub(node);
+        }
+        match n.parent() {
+            Some(p) => cur = p,
+            None => {
+                return u32::try_from(doc.len())
+                    .unwrap_or(u32::MAX)
+                    .saturating_sub(node)
+            }
+        }
+    }
+}
+
+/// Item kind codes shared with the Python shim's `_ITEM_CLASSES`:
+/// 0 text, 1 comment, 2 CDATA, 3 doctype, 4 processing instruction, 5 document.
+/// Returns `None` for elements, otherwise the kind and the node's text.
+fn item_kind(data: &NodeData) -> Option<(u8, Option<&str>)> {
+    match data {
+        NodeData::Element { .. } => None,
+        NodeData::Text(t) => Some((0, Some(t))),
+        NodeData::Comment(t) => Some((1, Some(t))),
+        NodeData::CData(t) => Some((2, Some(t))),
+        NodeData::Doctype(d) => Some((3, Some(&d.name))),
+        NodeData::ProcessingInstruction(pi) => Some((4, Some(&pi.data))),
+        NodeData::Document => Some((5, None)),
+    }
+}
+
 /// Visit every non-empty text node under `node` in document order, skipping
 /// comments and `<script>`/`<style>` content (BS4 behaviour).
 fn for_each_string<'d>(doc: &'d Document, node: NodeId, f: &mut impl FnMut(&'d str)) {
     match &doc.get(node).data {
         NodeData::Text(t) if !t.is_empty() => f(t),
         NodeData::Comment(_) => {} // skip comments
-        NodeData::Element { name, .. } if matches!(name.local.as_ref(), "script" | "style") => {} // skip like BS4
+        NodeData::Element(e) if matches!(e.name.local.as_ref(), "script" | "style") => {} // skip like BS4
         _ => {
             for child in doc.children_ids(node) {
                 for_each_string(doc, child, f);

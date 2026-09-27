@@ -9,6 +9,8 @@
 //! Regex and callable filters are handled in Python; the bindings call
 //! `iter_elements` and apply Python-side predicates.
 
+use markup5ever::LocalName;
+
 use crate::document::Document;
 use crate::node::NodeId;
 use crate::selector::{matches_group, parse_selector_cached, MatchContext};
@@ -66,46 +68,33 @@ pub struct FindOptions {
 
 /// Run `find_all` with the given options under `root`.
 pub fn find_all(doc: &Document, root: NodeId, opts: &FindOptions) -> Vec<NodeId> {
-    let mut results = Vec::new();
     let limit = if opts.limit == 0 {
         usize::MAX
     } else {
         opts.limit
     };
+    let q = CompiledFind::new(opts);
+    let matches = |&id: &NodeId| q.matches(doc, id);
 
     if opts.recursive {
         // Non-recursive: only direct children.
-        for child in doc.children_ids(root) {
-            if doc.get(child).data.is_element() && node_matches(doc, child, opts) {
-                results.push(child);
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
+        doc.children_ids(root).filter(matches).take(limit).collect()
     } else {
         // Recursive: full pre-order descent.
-        for id in DescendantsPreOrder::new(doc, root) {
-            if doc.get(id).data.is_element() && node_matches(doc, id, opts) {
-                results.push(id);
-                if results.len() >= limit {
-                    break;
-                }
-            }
-        }
+        DescendantsPreOrder::new(doc, root)
+            .filter(matches)
+            .take(limit)
+            .collect()
     }
-
-    results
 }
 
 /// Returns the first matching node under `root`, or `None`.
 pub fn find_one(doc: &Document, root: NodeId, opts: &FindOptions) -> Option<NodeId> {
+    let q = CompiledFind::new(opts);
     if opts.recursive {
-        doc.children_ids(root)
-            .find(|&c| doc.get(c).data.is_element() && node_matches(doc, c, opts))
+        doc.children_ids(root).find(|&c| q.matches(doc, c))
     } else {
-        DescendantsPreOrder::new(doc, root)
-            .find(|&id| doc.get(id).data.is_element() && node_matches(doc, id, opts))
+        DescendantsPreOrder::new(doc, root).find(|&id| q.matches(doc, id))
     }
 }
 
@@ -140,65 +129,88 @@ pub fn select_one(doc: &Document, root: NodeId, css: &str) -> Result<Option<Node
 
 // ── Node-level matching ───────────────────────────────────────────────────────
 
-fn node_matches(doc: &Document, node: NodeId, opts: &FindOptions) -> bool {
-    // 1. Name filter
-    if let Some(ref nf) = opts.name {
-        if !name_matches(doc, node, nf) {
-            return false;
-        }
-    }
-
-    // 2. Attribute filters
-    for af in &opts.attrs {
-        if !attr_filter_matches(doc, node, af) {
-            return false;
-        }
-    }
-
-    // 3. String filter (text content equality)
-    if let Some(ref expected) = opts.string {
-        let text = doc.get_text(node);
-        if text.trim() != expected.as_str() {
-            return false;
-        }
-    }
-
-    true
+/// `FindOptions` with tag and attribute names resolved to interned atoms once
+/// per query, so each element check compares atoms (an integer compare)
+/// instead of strings.
+struct CompiledFind<'o> {
+    name: Option<CompiledName>,
+    attrs: Vec<(LocalName, &'o AttrValueFilter)>,
+    string: Option<&'o str>,
 }
 
-fn name_matches(doc: &Document, node: NodeId, filter: &NameFilter) -> bool {
-    let tag = match doc.get(node).tag_name() {
-        Some(t) => t,
-        None => return false,
-    };
-    match filter {
-        NameFilter::Any => true,
-        NameFilter::Exact(n) => tag == n.as_str(),
-        NameFilter::AnyOf(names) => names.iter().any(|n| n.as_str() == tag),
-    }
+enum CompiledName {
+    Any,
+    Exact(LocalName),
+    AnyOf(Vec<LocalName>),
 }
 
-fn attr_filter_matches(doc: &Document, node: NodeId, filter: &AttrFilter) -> bool {
-    // Special handling: `class` filter uses token matching.
-    if filter.name == "class" {
-        if let AttrValueFilter::ContainsToken(ref cls) = filter.value {
-            return match doc.get_attr(node, "class") {
-                Some(v) => v.split_ascii_whitespace().any(|t| t == cls.as_str()),
-                None => false,
+impl<'o> CompiledFind<'o> {
+    fn new(opts: &'o FindOptions) -> Self {
+        CompiledFind {
+            name: opts.name.as_ref().map(|nf| match nf {
+                NameFilter::Any => CompiledName::Any,
+                NameFilter::Exact(n) => CompiledName::Exact(LocalName::from(n.as_str())),
+                NameFilter::AnyOf(ns) => {
+                    CompiledName::AnyOf(ns.iter().map(|n| LocalName::from(n.as_str())).collect())
+                }
+            }),
+            attrs: opts
+                .attrs
+                .iter()
+                .map(|af| (LocalName::from(af.name.as_str()), &af.value))
+                .collect(),
+            string: opts.string.as_deref(),
+        }
+    }
+
+    fn matches(&self, doc: &Document, node: NodeId) -> bool {
+        let (tag, attrs) = match doc.get(node).data.as_element() {
+            Some(e) => (&e.name.local, &e.attrs),
+            None => return false,
+        };
+
+        // 1. Name filter
+        match &self.name {
+            None | Some(CompiledName::Any) => {}
+            Some(CompiledName::Exact(n)) => {
+                if tag != n {
+                    return false;
+                }
+            }
+            Some(CompiledName::AnyOf(ns)) => {
+                if !ns.contains(tag) {
+                    return false;
+                }
+            }
+        }
+
+        // 2. Attribute filters
+        for (name, filter) in &self.attrs {
+            let value = attrs
+                .iter()
+                .find(|a| a.name.local == *name)
+                .map(|a| a.value.as_str());
+            let ok = match filter {
+                AttrValueFilter::Present | AttrValueFilter::Any => value.is_some(),
+                AttrValueFilter::Absent => value.is_none(),
+                AttrValueFilter::Exact(expected) => value == Some(expected.as_str()),
+                // Space-separated token list (e.g. `class`) contains the token.
+                AttrValueFilter::ContainsToken(token) => {
+                    value.is_some_and(|v| v.split_ascii_whitespace().any(|t| t == token))
+                }
             };
+            if !ok {
+                return false;
+            }
         }
-    }
 
-    match &filter.value {
-        AttrValueFilter::Present => doc.get_attr(node, &filter.name).is_some(),
-        AttrValueFilter::Absent => doc.get_attr(node, &filter.name).is_none(),
-        AttrValueFilter::Any => doc.get_attr(node, &filter.name).is_some(),
-        AttrValueFilter::Exact(expected) => {
-            doc.get_attr(node, &filter.name) == Some(expected.as_str())
+        // 3. String filter (text content equality)
+        if let Some(expected) = self.string {
+            if doc.get_text(node).trim() != expected {
+                return false;
+            }
         }
-        AttrValueFilter::ContainsToken(token) => match doc.get_attr(node, &filter.name) {
-            Some(v) => v.split_ascii_whitespace().any(|t| t == token.as_str()),
-            None => false,
-        },
+
+        true
     }
 }

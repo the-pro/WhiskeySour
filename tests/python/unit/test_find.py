@@ -488,3 +488,44 @@ class TestFindAllStringFastPath:
         assert len(soup.find_all(string=re.compile("eedle"), limit=None)) == 5
         assert len(soup.find_all("p", limit=None)) == 2
         assert len(soup.find("div").find_all("p", limit=None)) == 1
+
+
+class TestFindMatchesFindAll:
+    """`find()` has its own fast path; it must agree with `find_all(limit=1)`."""
+
+    HTML = (
+        "<div id='a' class='x y'><p class='y'>one</p><span data-k='v'>two</span>"
+        "<p lang='en'>Needle</p></div><div id='b'><p class='x'>three</p><b>Needle</b></div>"
+    )
+
+    FILTERS = [
+        {},
+        {"name": "p"},
+        {"name": "P"},
+        {"name": True},
+        {"name": "p", "class_": "x"},
+        {"class_": "y"},
+        {"id": "b"},
+        {"name": "span", "attrs": {"data-k": "v"}},
+        {"attrs": {"lang": True}},
+        {"name": "p", "attrs": {"lang": False}},
+        {"name": "p", "string": "Needle"},
+        {"name": "div", "recursive": False},
+        {"name": ["b", "span"]},
+        {"name": re.compile("^s")},
+        {"class_": ["x", "y"]},
+        {"name": lambda t: t.name == "b"},
+        {"name": "nope"},
+        {"string": "Needle"},
+    ]
+
+    @pytest.mark.parametrize("kw", FILTERS, ids=lambda kw: repr(kw))
+    def test_find_equals_first_of_find_all(self, parse, kw):
+        soup = parse(self.HTML)
+        for scope in (soup, soup.find("div")):
+            all_ = scope.find_all(limit=1, **kw)
+            one = scope.find(**kw)
+            if all_:
+                assert one == all_[0] and str(one) == str(all_[0])
+            else:
+                assert one is None

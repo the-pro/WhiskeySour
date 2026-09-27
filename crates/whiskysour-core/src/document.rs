@@ -2,7 +2,6 @@
 
 use crate::node::{Attr, Node, NodeData, NodeId};
 use markup5ever::QualName;
-use smallvec::SmallVec;
 
 /// The central data structure: a flat Vec of Nodes with integer sibling/parent links.
 ///
@@ -33,7 +32,11 @@ impl Document {
 
     /// Allocate a new node and return its id.
     pub fn alloc(&mut self, data: NodeData) -> NodeId {
-        let id = self.nodes.len() as NodeId;
+        // u32::MAX is reserved as the "no node" link sentinel (see node.rs).
+        let id = match NodeId::try_from(self.nodes.len()) {
+            Ok(id) if id != NodeId::MAX => id,
+            _ => panic!("document exceeds the maximum of {} nodes", NodeId::MAX),
+        };
         self.nodes.push(Node::new(data));
         id
     }
@@ -67,90 +70,90 @@ impl Document {
 
     /// Append `child` as the last child of `parent`.
     pub fn append_child(&mut self, parent: NodeId, child: NodeId) {
-        let prev_last = self.nodes[parent as usize].last_child;
+        let prev_last = self.nodes[parent as usize].last_child();
 
         // Link: prev_last ↔ child
         if let Some(prev) = prev_last {
-            self.nodes[prev as usize].next_sibling = Some(child);
-            self.nodes[child as usize].prev_sibling = Some(prev);
+            self.nodes[prev as usize].set_next_sibling(Some(child));
+            self.nodes[child as usize].set_prev_sibling(Some(prev));
         } else {
             // parent had no children
-            self.nodes[parent as usize].first_child = Some(child);
+            self.nodes[parent as usize].set_first_child(Some(child));
         }
 
-        self.nodes[parent as usize].last_child = Some(child);
-        self.nodes[child as usize].parent = Some(parent);
+        self.nodes[parent as usize].set_last_child(Some(child));
+        self.nodes[child as usize].set_parent(Some(parent));
     }
 
     /// Prepend `child` as the first child of `parent`.
     pub fn prepend_child(&mut self, parent: NodeId, child: NodeId) {
-        let prev_first = self.nodes[parent as usize].first_child;
+        let prev_first = self.nodes[parent as usize].first_child();
 
         if let Some(next) = prev_first {
-            self.nodes[next as usize].prev_sibling = Some(child);
-            self.nodes[child as usize].next_sibling = Some(next);
+            self.nodes[next as usize].set_prev_sibling(Some(child));
+            self.nodes[child as usize].set_next_sibling(Some(next));
         } else {
-            self.nodes[parent as usize].last_child = Some(child);
+            self.nodes[parent as usize].set_last_child(Some(child));
         }
 
-        self.nodes[parent as usize].first_child = Some(child);
-        self.nodes[child as usize].parent = Some(parent);
+        self.nodes[parent as usize].set_first_child(Some(child));
+        self.nodes[child as usize].set_parent(Some(parent));
     }
 
     /// Insert `new_node` immediately before `ref_node` in the sibling chain.
     pub fn insert_before(&mut self, ref_node: NodeId, new_node: NodeId) {
-        let parent = match self.nodes[ref_node as usize].parent {
+        let parent = match self.nodes[ref_node as usize].parent() {
             Some(p) => p,
             None => return, // ref_node has no parent; no-op
         };
-        let prev_sib = self.nodes[ref_node as usize].prev_sibling;
+        let prev_sib = self.nodes[ref_node as usize].prev_sibling();
 
-        self.nodes[new_node as usize].parent = Some(parent);
-        self.nodes[new_node as usize].next_sibling = Some(ref_node);
-        self.nodes[new_node as usize].prev_sibling = prev_sib;
-        self.nodes[ref_node as usize].prev_sibling = Some(new_node);
+        self.nodes[new_node as usize].set_parent(Some(parent));
+        self.nodes[new_node as usize].set_next_sibling(Some(ref_node));
+        self.nodes[new_node as usize].set_prev_sibling(prev_sib);
+        self.nodes[ref_node as usize].set_prev_sibling(Some(new_node));
 
         match prev_sib {
-            Some(prev) => self.nodes[prev as usize].next_sibling = Some(new_node),
-            None => self.nodes[parent as usize].first_child = Some(new_node),
+            Some(prev) => self.nodes[prev as usize].set_next_sibling(Some(new_node)),
+            None => self.nodes[parent as usize].set_first_child(Some(new_node)),
         }
     }
 
     /// Insert `new_node` immediately after `ref_node` in the sibling chain.
     pub fn insert_after(&mut self, ref_node: NodeId, new_node: NodeId) {
-        let parent = match self.nodes[ref_node as usize].parent {
+        let parent = match self.nodes[ref_node as usize].parent() {
             Some(p) => p,
             None => return,
         };
-        let next_sib = self.nodes[ref_node as usize].next_sibling;
+        let next_sib = self.nodes[ref_node as usize].next_sibling();
 
-        self.nodes[new_node as usize].parent = Some(parent);
-        self.nodes[new_node as usize].prev_sibling = Some(ref_node);
-        self.nodes[new_node as usize].next_sibling = next_sib;
-        self.nodes[ref_node as usize].next_sibling = Some(new_node);
+        self.nodes[new_node as usize].set_parent(Some(parent));
+        self.nodes[new_node as usize].set_prev_sibling(Some(ref_node));
+        self.nodes[new_node as usize].set_next_sibling(next_sib);
+        self.nodes[ref_node as usize].set_next_sibling(Some(new_node));
 
         match next_sib {
-            Some(next) => self.nodes[next as usize].prev_sibling = Some(new_node),
-            None => self.nodes[parent as usize].last_child = Some(new_node),
+            Some(next) => self.nodes[next as usize].set_prev_sibling(Some(new_node)),
+            None => self.nodes[parent as usize].set_last_child(Some(new_node)),
         }
     }
 
     /// Detach `node` from its parent (does NOT free the node slot).
     pub fn detach(&mut self, node: NodeId) {
-        let parent = match self.nodes[node as usize].parent.take() {
+        let parent = match self.nodes[node as usize].take_parent() {
             Some(p) => p,
             None => return,
         };
-        let prev = self.nodes[node as usize].prev_sibling.take();
-        let next = self.nodes[node as usize].next_sibling.take();
+        let prev = self.nodes[node as usize].take_prev_sibling();
+        let next = self.nodes[node as usize].take_next_sibling();
 
         match prev {
-            Some(p) => self.nodes[p as usize].next_sibling = next,
-            None => self.nodes[parent as usize].first_child = next,
+            Some(p) => self.nodes[p as usize].set_next_sibling(next),
+            None => self.nodes[parent as usize].set_first_child(next),
         }
         match next {
-            Some(n) => self.nodes[n as usize].prev_sibling = prev,
-            None => self.nodes[parent as usize].last_child = prev,
+            Some(n) => self.nodes[n as usize].set_prev_sibling(prev),
+            None => self.nodes[parent as usize].set_last_child(prev),
         }
     }
 
@@ -171,7 +174,7 @@ impl Document {
     pub fn children_ids(&self, node: NodeId) -> ChildrenIter<'_> {
         ChildrenIter {
             doc: self,
-            next: self.nodes[node as usize].first_child,
+            next: self.nodes[node as usize].first_child(),
         }
     }
 
@@ -179,7 +182,10 @@ impl Document {
     pub fn descendants_ids(&self, node: NodeId) -> DescendantsIter<'_> {
         DescendantsIter {
             doc: self,
-            stack: self.nodes[node as usize].first_child.into_iter().collect(),
+            stack: self.nodes[node as usize]
+                .first_child()
+                .into_iter()
+                .collect(),
         }
     }
 
@@ -188,11 +194,8 @@ impl Document {
     // -----------------------------------------------------------------------
 
     /// Returns a reference to the attrs slice of an element node, or `None`.
-    pub fn attrs(&self, node: NodeId) -> Option<&SmallVec<[Attr; 4]>> {
-        match &self.nodes[node as usize].data {
-            NodeData::Element { attrs, .. } => Some(attrs),
-            _ => None,
-        }
+    pub fn attrs(&self, node: NodeId) -> Option<&[Attr]> {
+        self.nodes[node as usize].data.attrs()
     }
 
     /// Get the value of a specific attribute on an element node.
@@ -205,7 +208,7 @@ impl Document {
 
     /// Set (or add) an attribute on an element (plain string name, no namespace).
     pub fn set_attr(&mut self, node: NodeId, name: &str, value: &str) {
-        if let NodeData::Element { attrs, .. } = &mut self.nodes[node as usize].data {
+        if let Some(attrs) = self.nodes[node as usize].data.attrs_mut() {
             if let Some(a) = attrs.iter_mut().find(|a| a.local_name() == name) {
                 a.value = value.to_owned();
             } else {
@@ -218,9 +221,8 @@ impl Document {
 
     /// Set (or add) an attribute using a full `QualName` (used by the parser).
     pub fn set_attr_qual(&mut self, node: NodeId, name: QualName, value: String) {
-        if let NodeData::Element { attrs, .. } = &mut self.nodes[node as usize].data {
-            let local = name.local.as_ref().to_owned();
-            if let Some(a) = attrs.iter_mut().find(|a| a.local_name() == local) {
+        if let Some(attrs) = self.nodes[node as usize].data.attrs_mut() {
+            if let Some(a) = attrs.iter_mut().find(|a| a.name.local == name.local) {
                 a.value = value;
             } else {
                 attrs.push(Attr::new(name, value));
@@ -230,7 +232,7 @@ impl Document {
 
     /// Remove an attribute from an element.
     pub fn remove_attr(&mut self, node: NodeId, name: &str) {
-        if let NodeData::Element { attrs, .. } = &mut self.nodes[node as usize].data {
+        if let Some(attrs) = self.nodes[node as usize].data.attrs_mut() {
             attrs.retain(|a| a.local_name() != name);
         }
     }
@@ -314,7 +316,7 @@ impl<'a> Iterator for ChildrenIter<'a> {
     type Item = NodeId;
     fn next(&mut self) -> Option<NodeId> {
         let id = self.next?;
-        self.next = self.doc.nodes[id as usize].next_sibling;
+        self.next = self.doc.nodes[id as usize].next_sibling();
         Some(id)
     }
 }

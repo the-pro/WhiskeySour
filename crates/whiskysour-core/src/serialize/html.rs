@@ -45,9 +45,9 @@ fn write_node(doc: &Document, node: NodeId, buf: &mut String) {
     match &doc.get(node).data {
         NodeData::Document => write_children(doc, node, buf),
 
-        NodeData::Doctype { name, .. } => {
+        NodeData::Doctype(d) => {
             buf.push_str("<!DOCTYPE ");
-            buf.push_str(name);
+            buf.push_str(&d.name);
             buf.push('>');
         }
 
@@ -57,11 +57,11 @@ fn write_node(doc: &Document, node: NodeId, buf: &mut String) {
             buf.push_str("-->");
         }
 
-        NodeData::ProcessingInstruction { target, data } => {
+        NodeData::ProcessingInstruction(pi) => {
             buf.push_str("<?");
-            buf.push_str(target);
+            buf.push_str(&pi.target);
             buf.push(' ');
-            buf.push_str(data);
+            buf.push_str(&pi.data);
             buf.push_str("?>");
         }
 
@@ -69,7 +69,7 @@ fn write_node(doc: &Document, node: NodeId, buf: &mut String) {
             // Check if the parent is a raw-text element.
             let raw = doc
                 .get(node)
-                .parent
+                .parent()
                 .and_then(|p| doc.get(p).tag_name())
                 .map(|t| RAW_TEXT.contains(&t))
                 .unwrap_or(false);
@@ -86,7 +86,8 @@ fn write_node(doc: &Document, node: NodeId, buf: &mut String) {
             buf.push_str("]]>");
         }
 
-        NodeData::Element { name, attrs, .. } => {
+        NodeData::Element(e) => {
+            let (name, attrs) = (&e.name, &e.attrs);
             let tag = name.local.as_ref();
             buf.push('<');
             buf.push_str(tag);
@@ -130,7 +131,8 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
             }
         }
 
-        NodeData::Doctype { name, .. } => {
+        NodeData::Doctype(d) => {
+            let name = &d.name;
             indent.write(buf);
             buf.push_str("<!DOCTYPE ");
             buf.push_str(name);
@@ -153,7 +155,8 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
             }
         }
 
-        NodeData::Element { name, attrs, .. } => {
+        NodeData::Element(e) => {
+            let (name, attrs) = (&e.name, &e.attrs);
             let tag = name.local.as_ref();
             indent.write(buf);
             buf.push('<');
@@ -172,8 +175,8 @@ fn write_pretty(doc: &Document, node: NodeId, buf: &mut String, depth: usize, iw
                 let raw = RAW_TEXT.contains(&tag);
                 // Inline if single text child and not raw-text element.
                 let n = doc.get(node);
-                let inline_child = match n.first_child {
-                    Some(c) if !raw && n.first_child == n.last_child => {
+                let inline_child = match n.first_child() {
+                    Some(c) if !raw && n.first_child() == n.last_child() => {
                         matches!(doc.get(c).data, NodeData::Text(_)).then_some(c)
                     }
                     _ => None,

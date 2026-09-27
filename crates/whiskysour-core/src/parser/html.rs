@@ -15,7 +15,7 @@ use html5ever::{
 use markup5ever::{local_name, namespace_url, ns, ExpandedName};
 
 use crate::document::Document;
-use crate::node::{Attr, NodeData, NodeId, DOCUMENT_ID};
+use crate::node::{Attr, DoctypeData, NodeData, NodeId, PiData, DOCUMENT_ID};
 
 // ── Public options ────────────────────────────────────────────────────────────
 
@@ -57,10 +57,8 @@ pub fn parse_html_fragment(markup: &str) -> Document {
 struct WsSink {
     doc: Document,
     quirks: QuirksMode,
-    // We collect parse errors silently; expose later if needed.
-    _errors: Vec<Cow<'static, str>>,
     // Fallback QualName for elem_name when called on non-element nodes.
-    _dummy_name: QualName,
+    dummy_name: QualName,
 }
 
 impl WsSink {
@@ -68,16 +66,14 @@ impl WsSink {
         WsSink {
             doc: Document::new(),
             quirks: QuirksMode::NoQuirks,
-            _errors: Vec::new(),
-            _dummy_name: QualName::new(None, ns!(html), local_name!("span")),
+            dummy_name: QualName::new(None, ns!(html), local_name!("span")),
         }
     }
 
     /// Try to coalesce `text` with the last child of `parent` if it is already
     /// a Text node (html5ever may call append multiple times for adjacent text).
     fn append_text(&mut self, parent: NodeId, text: StrTendril) {
-        let last = self.doc.get(parent).last_child;
-        if let Some(last_id) = last {
+        if let Some(last_id) = self.doc.get(parent).last_child() {
             if let NodeData::Text(t) = &mut self.doc.get_mut(last_id).data {
                 t.push_str(&text);
                 return;
@@ -88,8 +84,7 @@ impl WsSink {
     }
 
     fn append_text_before(&mut self, sibling: NodeId, text: StrTendril) {
-        let prev = self.doc.get(sibling).prev_sibling;
-        if let Some(prev_id) = prev {
+        if let Some(prev_id) = self.doc.get(sibling).prev_sibling() {
             if let NodeData::Text(t) = &mut self.doc.get_mut(prev_id).data {
                 t.push_str(&text);
                 return;
@@ -111,8 +106,8 @@ impl TreeSink for WsSink {
     }
 
     // ── Error / quirks ────────────────────────────────────────────────────────
-    fn parse_error(&mut self, msg: Cow<'static, str>) {
-        self._errors.push(msg);
+    fn parse_error(&mut self, _msg: Cow<'static, str>) {
+        // Parse errors are recovered from per the HTML5 spec and not surfaced.
     }
 
     fn set_quirks_mode(&mut self, mode: QuirksMode) {
@@ -129,9 +124,9 @@ impl TreeSink for WsSink {
     }
 
     fn elem_name<'a>(&'a self, target: &'a NodeId) -> ExpandedName<'a> {
-        match &self.doc.get(*target).data {
-            NodeData::Element { name, .. } => name.expanded(),
-            _ => self._dummy_name.expanded(),
+        match self.doc.get(*target).data.qual_name() {
+            Some(name) => name.expanded(),
+            None => self.dummy_name.expanded(),
         }
     }
 
@@ -146,12 +141,9 @@ impl TreeSink for WsSink {
             .into_iter()
             .map(|a| Attr::new(a.name, a.value.to_string()))
             .collect();
-        self.doc.alloc(NodeData::Element {
-            name,
-            attrs,
-            self_closing: false, // html5ever doesn't track this; void elements are handled in serialiser
-            is_template: flags.template,
-        })
+        // html5ever doesn't track self-closing; void elements are handled in the serialiser.
+        self.doc
+            .alloc(NodeData::element(name, attrs, false, flags.template))
     }
 
     fn create_comment(&mut self, text: StrTendril) -> NodeId {
@@ -159,10 +151,11 @@ impl TreeSink for WsSink {
     }
 
     fn create_pi(&mut self, target: StrTendril, data: StrTendril) -> NodeId {
-        self.doc.alloc(NodeData::ProcessingInstruction {
-            target: target.to_string(),
-            data: data.to_string(),
-        })
+        self.doc
+            .alloc(NodeData::ProcessingInstruction(Box::new(PiData {
+                target: target.to_string(),
+                data: data.to_string(),
+            })))
     }
 
     // ── Tree manipulation ─────────────────────────────────────────────────────
@@ -188,7 +181,7 @@ impl TreeSink for WsSink {
         prev_element: &NodeId,
         child: NodeOrText<NodeId>,
     ) {
-        if self.doc.get(*element).parent.is_some() {
+        if self.doc.get(*element).parent().is_some() {
             self.append_before_sibling(element, child);
         } else {
             self.append(prev_element, child);
@@ -201,18 +194,21 @@ impl TreeSink for WsSink {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
-        let id = self.doc.alloc(NodeData::Doctype {
+        let id = self.doc.alloc(NodeData::Doctype(Box::new(DoctypeData {
             name: name.to_string(),
             public_id: public_id.to_string(),
             system_id: system_id.to_string(),
-        });
+        })));
         self.doc.append_child(DOCUMENT_ID, id);
     }
 
     fn add_attrs_if_missing(&mut self, target: &NodeId, attrs: Vec<Attribute>) {
         for a in attrs {
-            let local = a.name.local.as_ref().to_owned();
-            if self.doc.get_attr(*target, &local).is_none() {
+            let present = self
+                .doc
+                .attrs(*target)
+                .is_some_and(|existing| existing.iter().any(|e| e.name.local == a.name.local));
+            if !present {
                 self.doc.set_attr_qual(*target, a.name, a.value.to_string());
             }
         }

@@ -423,3 +423,47 @@ class TestRepeatedParse:
         for _ in range(10):
             soup = parse(html)
             assert len(soup.find_all("div")) == 500
+
+
+class TestConcurrentQueriesAndMutation:
+    def test_large_queries_while_mutating_do_not_deadlock(self, parse):
+        """Big queries release the GIL; a writer on the same document must still
+        make progress and nothing may deadlock."""
+        soup = parse(make_wide_document(3000))  # large enough to release the GIL
+        body = soup.find("body")
+        errors: list[BaseException] = []
+        stop = threading.Event()
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    soup.select("div")
+                    soup.find_all("div", limit=0)
+                    soup.get_text()
+            except BaseException as exc:  # pragma: no cover - surfaced below
+                errors.append(exc)
+
+        def writer():
+            try:
+                for i in range(200):
+                    tag = soup.new_tag("p")
+                    tag.string = f"new {i}"
+                    body.append(tag)
+                    if i % 2:
+                        tag.decompose()
+            except BaseException as exc:  # pragma: no cover
+                errors.append(exc)
+
+        readers = [threading.Thread(target=reader) for _ in range(3)]
+        w = threading.Thread(target=writer)
+        for t in readers:
+            t.start()
+        w.start()
+        w.join(timeout=20)
+        stop.set()
+        for t in readers:
+            t.join(timeout=20)
+        assert not w.is_alive() and not any(t.is_alive() for t in readers), "deadlock"
+        assert errors == []
+        added = [p for p in soup.find_all("p") if p.get_text().startswith("new ")]
+        assert len(added) == 100  # 200 appended, every odd one decomposed
