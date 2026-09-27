@@ -125,7 +125,7 @@ These are non-negotiable. A >5% regression against the baseline blocks merge.
 
 5. **`SmallVec<[Attr; 4]>` on element attrs** avoids a heap allocation for the common case of ≤4 attributes. Do not change this to `Vec` without a benchmark justifying it.
 
-6. **Selector LRU cache** in `whiskeysour-core/selector/` caches compiled DFAs. Do not clear it eagerly or add locks that serialise selector access across threads.
+6. **Selector cache** — `parse_selector_cached` in `whiskysour-core/src/selector/mod.rs` keeps parsed selectors in a thread-local map (reset when it exceeds 256 entries). Do not clear it eagerly or add locks that serialise selector access across threads.
 
 7. **Run benchmarks with `--release` builds** (`maturin develop --release`) before reporting numbers. Dev builds are 2–3× slower.
 

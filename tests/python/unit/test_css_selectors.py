@@ -588,3 +588,20 @@ class TestSelectorFastPaths:
     def test_dash_match(self, parse):
         soup = parse('<p lang="en">1</p><p lang="en-US">2</p><p lang="english">3</p><p lang="e">4</p>')
         assert [p.get_text() for p in soup.select("[lang|=en]")] == ["1", "2"]
+
+    def test_nth_evaluated_out_of_document_order(self, parse):
+        # `~` / `+` test earlier siblings after later ones, so nth indices are
+        # computed in reverse order within one query.
+        soup = parse(self.LIST_HTML)
+        got = [li.get_text() for li in soup.select("li:nth-child(58) ~ li:nth-last-child(odd)")]
+        assert got == ["60"]
+        got = [li.get_text() for li in soup.select("li:nth-last-child(3) + li:nth-child(59)")]
+        assert got == ["59"]
+        assert soup.select_one("li:last-child").get_text() == "60"
+        assert soup.select_one("li:first-child").get_text() == "1"
+
+    def test_select_limit_none_means_unlimited(self, parse):
+        soup = parse(self.LIST_HTML)
+        assert soup.select("li", limit=None) == soup.select("li")
+        ul = soup.find("ul")
+        assert len(ul.select("li", limit=None)) == 60

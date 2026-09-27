@@ -494,6 +494,7 @@ class Tag:
         recursive: bool,
         limit: int,
     ) -> List[Any]:
+        limit = limit or 0  # BS4 uses limit=None for "no limit"
         # Special case: find_all(string=...) with no name/attrs → return NavigableString objects
         if string is not None and name is None and not attrs:
             return self._find_string_nodes(string, limit)
@@ -537,7 +538,7 @@ class Tag:
         return _find_string_nodes(self._rust, string_spec, limit)
 
     def select(self, selector: str, limit: int = 0) -> List["Tag"]:
-        if limit > 0:
+        if limit and limit > 0:
             # Rust stops traversing once `limit` matches are found.
             return [Tag(r) for r in self._rust.select(selector, limit)]
         wrapped = [Tag(r) for r in self._rust.select(selector)]
@@ -711,6 +712,7 @@ class Tag:
 
 def _find_string_nodes(rust: Any, string_spec: Any, limit: int) -> List[NavigableString]:
     """Return string-like descendants of ``rust`` (text/comment/etc.) matching string_spec."""
+    limit = limit or 0  # BS4 uses limit=None for "no limit"
     if isinstance(string_spec, str) and not callable(string_spec) and limit >= 0:
         # Exact-text match: Rust filters by node type and value in one pass.
         return [_wrap(n) for n in rust.find_strings(string_spec, limit)]
@@ -892,6 +894,7 @@ class WhiskeySour:
         recursive: bool,
         limit: int,
     ) -> List[Any]:
+        limit = limit or 0  # BS4 uses limit=None for "no limit"
         # Special case: find_all(string=...) with no name/attrs → return NavigableString objects
         if string is not None and name is None and not attrs:
             return self._find_string_nodes(string, limit)
@@ -931,7 +934,7 @@ class WhiskeySour:
         return _find_string_nodes(self._rust, string_spec, limit)
 
     def select(self, selector: str, limit: int = 0) -> List[Tag]:
-        if limit > 0:
+        if limit and limit > 0:
             # Rust stops traversing once `limit` matches are found.
             return [Tag(r) for r in self._rust.select(selector, limit)]
         wrapped = [Tag(r) for r in self._rust.select(selector)]

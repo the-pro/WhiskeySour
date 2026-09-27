@@ -480,3 +480,11 @@ class TestFindAllStringFastPath:
         soup = parse(self.HTML)
         assert len(soup.find_all(string=re.compile("^[Nn]eedle$"))) == 5
         assert len(soup.find_all(string=lambda s: s.lower() == "needle")) == 5
+
+    def test_limit_none_means_unlimited(self, parse):
+        # BeautifulSoup's default is limit=None.
+        soup = parse(self.HTML)
+        assert len(soup.find_all(string="Needle", limit=None)) == 4
+        assert len(soup.find_all(string=re.compile("eedle"), limit=None)) == 5
+        assert len(soup.find_all("p", limit=None)) == 2
+        assert len(soup.find("div").find_all("p", limit=None)) == 1

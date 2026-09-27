@@ -8,6 +8,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
+use smallvec::SmallVec;
+
 use crate::document::Document;
 use crate::node::{NodeData, NodeId};
 use crate::traversal::{child_index, child_index_from_end};
@@ -19,7 +21,8 @@ use crate::traversal::{child_index, child_index_from_end};
 ///
 /// It memoises nth-child / nth-of-type sibling indices. Without it,
 /// `li:nth-child(2n)` over a list of N items rescans the sibling list for
-/// every candidate (O(N²)); with it each parent's children are indexed once.
+/// every candidate (O(N²)); with it each sibling is counted at most once per
+/// index kind.
 #[derive(Default)]
 pub(crate) struct MatchContext {
     /// (node, kind) → 1-based index. `kind` bit 0 = same-type, bit 1 = from-end.
@@ -58,60 +61,57 @@ impl Hasher for IdHasher {
 impl MatchContext {
     /// 1-based position of `node` among its element siblings, optionally
     /// restricted to siblings with the same tag name and/or counted from the end.
+    ///
+    /// On a miss, walks towards the edge being counted from until it reaches a
+    /// sibling whose index is already known, then caches every sibling it
+    /// passed. `select()` visits siblings in document order, so a full query is
+    /// linear, and an early match (e.g. `select_one("li:first-child")`) only
+    /// touches the siblings it needs.
     fn child_index(&self, doc: &Document, node: NodeId, same_type: bool, from_end: bool) -> usize {
         let kind = same_type as u8 | ((from_end as u8) << 1);
         if let Some(&idx) = self.nth.borrow().get(&(node, kind)) {
             return idx as usize;
         }
-        let parent = match doc.get(node).parent {
-            Some(p) => p,
-            None => return 1,
+        let local = match &doc.get(node).data {
+            NodeData::Element { name, .. } => &name.local,
+            // Selectors only test elements, but stay correct for anything else.
+            _ if from_end => return child_index_from_end(doc, node, same_type),
+            _ => return child_index(doc, node, same_type),
         };
 
-        // Index every sibling under `parent` in a single pass so later
-        // siblings are O(1) lookups.
-        let mut map = self.nth.borrow_mut();
-        let p = doc.get(parent);
-        let mut cur = if from_end {
-            p.last_child
-        } else {
-            p.first_child
-        };
-        let mut count: u32 = 0;
-        let mut per_type: Vec<(&markup5ever::LocalName, u32)> = Vec::new();
-        while let Some(id) = cur {
+        let step = |id: NodeId| {
             let n = doc.get(id);
-            if let NodeData::Element { name, .. } = &n.data {
-                let idx = if same_type {
-                    match per_type.iter_mut().find(|(t, _)| **t == name.local) {
-                        Some((_, c)) => {
-                            *c += 1;
-                            *c
-                        }
-                        None => {
-                            per_type.push((&name.local, 1));
-                            1
-                        }
-                    }
-                } else {
-                    count += 1;
-                    count
-                };
-                map.insert((id, kind), idx);
-            }
-            cur = if from_end {
-                n.prev_sibling
-            } else {
+            if from_end {
                 n.next_sibling
-            };
+            } else {
+                n.prev_sibling
+            }
+        };
+
+        let mut map = self.nth.borrow_mut();
+        // Counted siblings from `node` outwards; the last is nearest the edge.
+        let mut path: SmallVec<[NodeId; 8]> = SmallVec::new();
+        path.push(node);
+        let mut base = 0u32;
+        let mut cur = step(node);
+        while let Some(id) = cur {
+            if let NodeData::Element { name, .. } = &doc.get(id).data {
+                if !same_type || name.local == *local {
+                    if let Some(&idx) = map.get(&(id, kind)) {
+                        base = idx;
+                        break;
+                    }
+                    path.push(id);
+                }
+            }
+            cur = step(id);
         }
 
-        match map.get(&(node, kind)) {
-            Some(&idx) => idx as usize,
-            // `node` is not an element (never cached); fall back to a scan.
-            None if from_end => child_index_from_end(doc, node, same_type),
-            None => child_index(doc, node, same_type),
+        let len = path.len() as u32;
+        for (k, &id) in path.iter().enumerate() {
+            map.insert((id, kind), base + len - k as u32);
         }
+        (base + len) as usize
     }
 }
 
