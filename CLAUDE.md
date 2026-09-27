@@ -6,9 +6,9 @@ Instructions for Claude Code working in this repository. These override default 
 
 ## Project overview
 
-WhiskeySour is a high-performance, drop-in replacement for Python's BeautifulSoup, written in Rust and exposed to Python via PyO3 + maturin. The goal is identical API surface to BS4 with 7–50× faster operations and 12× lower memory per node.
+WhiskeySour is a high-performance, drop-in replacement for Python's BeautifulSoup, written in Rust and exposed to Python via PyO3 + maturin. It keeps BS4's API surface and parses HTML ~14× faster, queries 29–77× faster, serialises ~120× faster and uses ~3× less memory per node than bs4 + `html.parser` (release build, see README).
 
-**Status:** Beta. 450 unit tests passing, 508 including integration tests.
+**Status:** 561 unit tests (1 skipped), 58 integration tests and 16 fuzz tests passing.
 
 ---
 
@@ -27,7 +27,7 @@ PATH="$HOME/.cargo/bin:$PATH" maturin develop
 PATH="$HOME/.cargo/bin:$PATH" maturin develop --release
 
 # Rust type-check without building (fast)
-~/.cargo/bin/cargo check -p whiskeysour-py
+~/.cargo/bin/cargo check -p whiskysour-py
 
 # Run unit tests (primary test suite)
 source .venv/bin/activate && .venv/bin/pytest tests/python/unit/ --override-ini="addopts=" -q
@@ -41,12 +41,19 @@ source .venv/bin/activate && .venv/bin/pytest tests/python/integration/ --overri
 # Run against BS4 shim (compatibility check — no file changes)
 PYTHONPATH=/tmp .venv/bin/pytest tests/python/unit/ tests/python/integration/ --override-ini="addopts=" -q --tb=no
 
-# Performance comparison report
+# Performance comparison report (release build only)
 python tests/python/performance/bench_comparison.py
+
+# Regenerate the README performance table
+python tests/python/performance/readme_table.py
+
+# Benchmark suites (pytest-benchmark, incl. navigation + thread scaling) and Rust Criterion benches
+.venv/bin/pytest tests/python/performance/ --override-ini="addopts=" -q
+~/.cargo/bin/cargo bench -p whiskysour-core
 
 # Rust formatting and linting
 ~/.cargo/bin/cargo fmt
-~/.cargo/bin/cargo clippy -- -D warnings
+~/.cargo/bin/cargo clippy --all-targets -- -D warnings
 ```
 
 ---
@@ -59,17 +66,17 @@ WhiskeySour/
 ├── pyproject.toml                  # maturin build config; module = whiskeysour._core
 │
 ├── crates/
-│   ├── whiskeysour-core/            # Pure Rust library (no Python dependency)
+│   ├── whiskysour-core/             # Pure Rust library (no Python dependency)
 │   │   └── src/
 │   │       ├── node.rs             # Arena-allocated DOM: NodeId (u32), NodeData enum
 │   │       ├── document.rs         # Document struct: flat Vec<Node> arena
 │   │       ├── parser/             # html5ever TreeSink integration
-│   │       ├── selector/           # CSS selector DFA + LRU cache (cssparser)
+│   │       ├── selector/           # Hand-written CSS selector parser + matcher, per-thread cache
 │   │       ├── traversal/          # Tree iterators (ancestors, descendants, siblings)
 │   │       ├── query/              # find() / find_all() / select() logic
 │   │       └── serialize/          # HTML serialisation + prettify
 │   │
-│   └── whiskeysour-py/
+│   └── whiskysour-py/
 │       └── src/lib.rs              # All PyO3 bindings: PyTag (_Tag) + PyDocument (_Document)
 │
 ├── python/whiskeysour/
@@ -78,9 +85,9 @@ WhiskeySour/
 │
 └── tests/python/
     ├── conftest.py                 # parse / parse_fragment / html_doc fixtures
-    ├── unit/                       # 450 tests across 10 files
+    ├── unit/                       # 561 tests across 11 files
     ├── integration/                # 58 BS4 API parity tests
-    ├── performance/                # pytest-benchmark suites + bench_comparison.py
+    ├── performance/                # pytest-benchmark suites, bench_comparison.py, readme_table.py
     └── fuzz/                       # Hypothesis property tests
 ```
 
@@ -90,22 +97,23 @@ WhiskeySour/
 
 **Never collapse these layers.** The split is intentional and load-bearing.
 
-### Layer 1 — `whiskeysour-core` (pure Rust)
+### Layer 1 — `whiskysour-core` (pure Rust)
 - Zero Python dependency. Can be used as a standalone Rust crate.
 - `Document` = flat `Vec<Node>` arena; `NodeId` = `u32` index. No heap allocation per node beyond the arena itself.
-- `NodeData` is an enum: `Document | Element { name, attrs, self_closing, is_template } | Text | Comment | CData | ProcessingInstruction | Doctype`.
-- `attrs` on elements: `SmallVec<[Attr; 4]>` — avoids heap alloc for elements with ≤4 attributes.
+- `NodeData` is an enum: `Document | Element(Box<ElementData>) | Text | Comment | CData | ProcessingInstruction(Box<PiData>) | Doctype(Box<DoctypeData>)`. `ElementData` holds `name`, `attrs: Vec<Attr>`, `self_closing`, `is_template`.
+- `Node` is 56 bytes: a 32-byte `NodeData` plus five `u32` links with a `u32::MAX` "none" sentinel, read via `parent()` / `first_child()` / … accessors. A unit test in `node.rs` pins these sizes.
 - The tree is owned by `Document`, shared across threads via `Arc<RwLock<Document>>`.
 
-### Layer 2 — `whiskeysour-py` (`crates/whiskeysour-py/src/lib.rs`)
+### Layer 2 — `whiskysour-py` (`crates/whiskysour-py/src/lib.rs`)
 - PyO3 bindings only. No parsing or query logic here.
 - `PyTag` holds `Arc<RwLock<Document>>` + `NodeId`. Cloning is cheap (Arc clone).
 - `PyDocument` is the document root wrapper.
-- All Rust tree operations release the GIL (`py.allow_threads(...)`) so concurrent Python threads can parse simultaneously.
+- Parsing releases the GIL (`py.detach(...)`, PyO3 0.28's name for `allow_threads`). Queries, `get_text` and serialisation go through `read_doc_detached`, which releases it only when the estimated subtree size is ≥ `GIL_RELEASE_MIN_NODES` (4096), so small per-element calls don't pay the release cost.
 
 ### Layer 3 — `python/whiskeysour/__init__.py`
 - BeautifulSoup-compatible Python shim.
-- `_wrap(rust_obj)` dispatches `node_type` → `Tag | NavigableString | Comment | ...`
+- `_wrap(rust_obj)` dispatches `node_type` → `Tag | NavigableString | Comment | ...` for single nodes. Bulk navigation (`.contents`, `.children`, `.descendants`, `.strings`) uses the Rust `*_items` lists instead: an element comes back as a bare `_Tag`, anything else as `(kind, text, _Tag)`, wrapped by `_wrap_item` / `_new_string` without further Rust calls.
+- `Tag.find()` / `WhiskeySour.find()` call Rust `find` directly when `_needs_python_filter` is False (no intermediate `find_all` list). Keep this fast path, like the `find_all` one.
 - `_AttrProxy` — a `dict` subclass that syncs mutations back to Rust. **Created lazily** (only when `.attrs` is accessed); never create it on hot read paths.
 - `_python_filter` — handles regex/callable/list filters that cannot be expressed in Rust's type system.
 
@@ -121,9 +129,9 @@ These are non-negotiable. A >5% regression against the baseline blocks merge.
 
 3. **The fast path in `find_all`** delegates everything to Rust when there are no regex/callable/list filters (`_needs_python_filter` returns False). Preserve this: adding Python-side work to the fast path breaks the 7–14× speedups.
 
-4. **GIL release.** Tree traversals in `lib.rs` must use `py.allow_threads(...)` for any non-trivial Rust work. Parsing always releases the GIL.
+4. **GIL release.** Non-trivial tree work in `lib.rs` goes through `read_doc_detached(py, …)`. Always take the document lock *inside* the detached closure — holding it while re-acquiring the GIL can deadlock against a thread that holds the GIL and wants the write lock (`test_large_queries_while_mutating_do_not_deadlock` guards this). Code that builds Python objects cannot run detached.
 
-5. **`SmallVec<[Attr; 4]>` on element attrs** avoids a heap allocation for the common case of ≤4 attributes. Do not change this to `Vec` without a benchmark justifying it.
+5. **Keep `Node` small.** Element payloads are boxed and attributes live in a `Vec` because most nodes are text or elements with 0–2 attributes; this cut retained memory from ~330 to ~210–250 bytes/node with no parse slowdown. Don't add inline fields to `Node`/`NodeData` without measuring memory with `bench_memory.py` (RSS — `tracemalloc` cannot see Rust allocations) and speed with `readme_table.py`.
 
 6. **Selector cache** — `parse_selector_cached` in `whiskysour-core/src/selector/mod.rs` keeps parsed selectors in a thread-local map (reset when it exceeds 256 entries). Do not clear it eagerly or add locks that serialise selector access across threads.
 
@@ -189,6 +197,7 @@ WhiskeySour aims to be a faithful drop-in. When touching the Python shim:
 
 2. **Test file ownership:**
    - `test_parsing.py` — HTML5 parsing, fragments, void elements, encoding
+   - `test_malformed_html.py` — broken markup recovery (misnesting, stray/unclosed tags)
    - `test_find.py` — find / find_all / filter types
    - `test_css_selectors.py` — CSS3 selectors, pseudo-classes
    - `test_tree_navigation.py` — parent / children / siblings / descendants
@@ -205,14 +214,14 @@ WhiskeySour aims to be a faithful drop-in. When touching the Python shim:
 
 5. **Do not add `hasattr(node, "name")` checks.** Use `node.name is not None` — `NavigableString.name = None` makes `hasattr` return `True` for all nodes.
 
-6. **The baseline pass rate is 450/451 unit tests.** Do not submit changes that reduce this.
+6. **The baseline pass rate is 560/561 unit tests (1 skipped).** Do not submit changes that reduce this.
 
 ---
 
 ## Rust code rules
 
 - Run `cargo fmt` and `cargo clippy -- -D warnings` before committing Rust changes. Clippy warnings are errors.
-- Keep `whiskeysour-core` free of any PyO3 dependency. It must remain usable as a pure Rust library.
+- Keep `whiskysour-core` free of any PyO3 dependency. It must remain usable as a pure Rust library.
 - Prefer `&str` over `String` in function signatures where ownership is not needed.
 - `NodeId` is `u32`. Do not widen to `usize` or `u64` — it would inflate the arena.
 - Do not use `unwrap()` in production code paths. Use `?` or explicit error handling. `unwrap()` is acceptable in tests.
@@ -225,6 +234,7 @@ WhiskeySour aims to be a faithful drop-in. When touching the Python shim:
 - **Do not call `self._rust.attrs` in `Tag.get()`, `Tag.__getitem__`, or `Tag.__contains__`.** Use `get_coerced` / `has_attr`.
 - **Do not add Python-side caching** (e.g. `@functools.lru_cache` on instance methods). The Rust selector cache already handles this; double-caching adds GIL pressure.
 - **Do not change `_MULTI_VALUED_ATTRS`** without updating `get_coerced` in `lib.rs` to match — the two lists must stay in sync.
+- **Do not change the item kind codes** in `item_kind` (`lib.rs`) without updating `_ITEM_CLASSES` / `_DOCUMENT_KIND` in `__init__.py` — they must stay in sync.
 - **Do not run `maturin build --release` and commit the wheel.** Wheels are build artefacts.
 - **Do not use `git add -A` or `git add .`** when committing. Stage specific files to avoid committing `__pycache__`, `.pyc`, or build artefacts.
 - **Do not add `find_all_parallel()` or any multi-threaded traversal API** without a design discussion. The `Arc<RwLock<Document>>` allows concurrent reads but the Python API must remain GIL-aware.

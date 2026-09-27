@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use whiskysour_core::parser::html::{parse_html, ParseOptions};
+use whiskysour_core::parser::{parse_html, ParseOptions};
 
 fn bench_parse_small(c: &mut Criterion) {
     let html = "<html><head><title>Test</title></head><body><p class=\"intro\">Hello, world!</p></body></html>";

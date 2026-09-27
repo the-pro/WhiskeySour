@@ -3,6 +3,9 @@ bench_comparison.py — Head-to-head performance comparison: WhiskeySour vs Beau
 
 Generates a self-contained HTML report at bench_report.html.
 
+Build with `maturin develop --release` first: dev builds are 2–3× slower and
+their numbers should not be quoted.
+
 Usage:
     python tests/python/performance/bench_comparison.py
     python tests/python/performance/bench_comparison.py --output /tmp/report.html
@@ -168,6 +171,8 @@ def run_suite(html: str, rounds: int) -> dict[str, dict[str, dict]]:
     _bench_id  = _all_ids[len(_all_ids) // 2] if _all_ids else None
     _all_cls   = sorted({cls for t in ws_doc.find_all(True) for cls in (t.get("class") or [])}, key=lambda c: c)
     _bench_cls = _all_cls[len(_all_cls) // 2] if _all_cls else None
+    # A text node that exists in the fixture, for exact string search.
+    _bench_text = next((str(t.string) for t in ws_doc.find_all(True) if t.string), None)
 
     # --- find (first match) ---
     results["find (first tag)"] = {
@@ -207,16 +212,64 @@ def run_suite(html: str, rounds: int) -> dict[str, dict[str, dict]]:
         "bs4": measure(lambda: bs4_doc.select_one(_bench_tag), rounds),
     }
 
+    # --- CSS structural pseudo-class ---
+    _nth = f"{_bench_tag}:nth-child(2n)"
+    results["CSS :nth-child"] = {
+        "ws":  measure(lambda: ws_doc.select(_nth), rounds),
+        "bs4": measure(lambda: bs4_doc.select(_nth), rounds),
+    }
+
+    # --- CSS select with limit ---
+    results["CSS select (limit=5)"] = {
+        "ws":  measure(lambda: ws_doc.select(_bench_tag, limit=5), rounds),
+        "bs4": measure(lambda: bs4_doc.select(_bench_tag, limit=5), rounds),
+    }
+
+    # --- find_all(string=...) ---
+    if _bench_text:
+        results["find_all(string=)"] = {
+            "ws":  measure(lambda: ws_doc.find_all(string=_bench_text), rounds),
+            "bs4": measure(lambda: bs4_doc.find_all(string=_bench_text), rounds),
+        }
+
+    # --- per-item find (typical scraping loop) ---
+    _ws_items, _bs4_items = ws_doc.find_all(_bench_tag)[:200], bs4_doc.find_all(_bench_tag)[:200]
+    results["find per item (200)"] = {
+        "ws":  measure(lambda: [t.find(True) for t in _ws_items], rounds),
+        "bs4": measure(lambda: [t.find(True) for t in _bs4_items], rounds),
+    }
+
+    # --- tree iteration ---
+    results["iterate descendants"] = {
+        "ws":  measure(lambda: sum(1 for _ in ws_doc.find("body").descendants), rounds),
+        "bs4": measure(lambda: sum(1 for _ in bs4_doc.find("body").descendants), rounds),
+    }
+    results["list(strings)"] = {
+        "ws":  measure(lambda: list(ws_doc.find("body").strings), rounds),
+        "bs4": measure(lambda: list(bs4_doc.find("body").strings), rounds),
+    }
+
     # --- get_text ---
     results["get_text"] = {
         "ws":  measure(lambda: ws_doc.get_text(), rounds),
         "bs4": measure(lambda: bs4_doc.get_text(), rounds),
     }
 
+    results["get_text(strip)"] = {
+        "ws":  measure(lambda: ws_doc.get_text(" ", strip=True), rounds),
+        "bs4": measure(lambda: bs4_doc.get_text(" ", strip=True), rounds),
+    }
+
     # --- str (serialize) ---
     results["serialize (str)"] = {
         "ws":  measure(lambda: str(ws_doc), rounds),
         "bs4": measure(lambda: str(bs4_doc), rounds),
+    }
+
+    # --- prettify ---
+    results["prettify"] = {
+        "ws":  measure(lambda: ws_doc.prettify(), rounds),
+        "bs4": measure(lambda: bs4_doc.prettify(), rounds),
     }
 
     return results

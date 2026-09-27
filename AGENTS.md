@@ -6,9 +6,9 @@ Instructions for AI coding agents (Codex, Devin, Copilot Workspace, etc.) workin
 
 ## What this project is
 
-WhiskeySour is a Rust-backed, drop-in replacement for Python's BeautifulSoup library. It exposes an identical public API to BS4 but parses HTML 7–11× faster, queries 7–14× faster, serialises 43–50× faster, and uses 12× less memory per node.
+WhiskeySour is a Rust-backed, drop-in replacement for Python's BeautifulSoup library. It exposes the same public API as BS4 but parses HTML ~14× faster, queries 29–77× faster, serialises ~120× faster and uses ~3× less memory per node than bs4 + `html.parser` (release-build numbers in README.md).
 
-The project is in **Beta**. The core implementation is complete and 450 unit tests pass.
+561 unit tests (1 skipped), 58 integration tests and 16 fuzz tests pass.
 
 ---
 
@@ -31,14 +31,14 @@ PATH="$HOME/.cargo/bin:$PATH" maturin develop --release # release build (require
 ### Type-check Rust without building
 
 ```bash
-~/.cargo/bin/cargo check -p whiskeysour-py
+~/.cargo/bin/cargo check -p whiskysour-py
 ```
 
 ### Lint and format
 
 ```bash
 ~/.cargo/bin/cargo fmt                        # format Rust
-~/.cargo/bin/cargo clippy -- -D warnings      # lint Rust; warnings are errors
+~/.cargo/bin/cargo clippy --all-targets -- -D warnings  # lint Rust incl. benches; warnings are errors
 ```
 
 ---
@@ -70,7 +70,7 @@ PYTHONPATH=/tmp .venv/bin/pytest tests/python/unit/ tests/python/integration/ \
 
 | Suite | Minimum pass rate |
 |-------|:-----------------:|
-| `unit/` | **450 / 451** (1 skipped is expected) |
+| `unit/` | **560 / 561** (1 skipped is expected) |
 | `integration/` | **58 / 58** |
 
 Do not submit changes that reduce these numbers.
@@ -86,17 +86,17 @@ WhiskeySour/
 ├── pytest.ini
 │
 ├── crates/
-│   ├── whiskeysour-core/            # Pure Rust library — no Python dependency
+│   ├── whiskysour-core/             # Pure Rust library — no Python dependency
 │   │   └── src/
 │   │       ├── node.rs             # NodeId (u32), NodeData enum, Attr, arena types
 │   │       ├── document.rs         # Document: flat Vec<Node> arena
 │   │       ├── parser/             # html5ever TreeSink integration
-│   │       ├── selector/           # CSS DFA + LRU cache
+│   │       ├── selector/           # Hand-written CSS selector parser + matcher, per-thread cache
 │   │       ├── traversal/          # Iterator types for tree walks
 │   │       ├── query/              # find / find_all / select
 │   │       └── serialize/          # HTML output + prettify
 │   │
-│   └── whiskeysour-py/
+│   └── whiskysour-py/
 │       └── src/lib.rs              # PyO3 bindings: _Tag, _Document Python classes
 │
 ├── python/whiskeysour/
@@ -105,9 +105,9 @@ WhiskeySour/
 │
 └── tests/python/
     ├── conftest.py                 # Shared fixtures (parse, parse_fragment, html_doc)
-    ├── unit/                       # 450 tests across 10 files
+    ├── unit/                       # 561 tests across 11 files
     ├── integration/                # 58 BS4 compatibility tests
-    ├── performance/                # Benchmarks + bench_comparison.py
+    ├── performance/                # Benchmarks, bench_comparison.py, readme_table.py
     └── fuzz/                       # Hypothesis property tests
 ```
 
@@ -117,22 +117,23 @@ WhiskeySour/
 
 These layers must remain separate. Do not merge their responsibilities.
 
-### Layer 1 — `whiskeysour-core` (pure Rust)
-The tree is a flat `Vec<Node>` arena. A `NodeId` is a `u32` index — no pointers, no `Rc`, no `Box`. Each `Node` carries a `NodeData` enum variant: `Document`, `Element`, `Text`, `Comment`, `CData`, `ProcessingInstruction`, or `Doctype`.
+### Layer 1 — `whiskysour-core` (pure Rust)
+The tree is a flat `Vec<Node>` arena. A `NodeId` is a `u32` index — no pointers or `Rc` between nodes. Each `Node` carries a `NodeData` enum variant: `Document`, `Element`, `Text`, `Comment`, `CData`, `ProcessingInstruction`, or `Doctype`.
 
-Element attributes use `SmallVec<[Attr; 4]>` — zero heap allocation for elements with ≤4 attrs (which covers the overwhelming majority of real HTML).
+Each `Node` is 56 bytes: element data is boxed (`Element(Box<ElementData>)`, attributes in a `Vec`) and the five tree links are `u32`s with a sentinel, read through accessors like `node.parent()`. Most nodes are text or small elements, so this keeps memory at ~210–250 bytes/node including strings. Measure memory with `bench_memory.py` before adding inline fields.
 
 This crate has no PyO3 dependency and must stay that way. It can be used as a standalone Rust library.
 
-### Layer 2 — `whiskeysour-py/src/lib.rs`
-PyO3 glue code only. `PyTag` = `Arc<RwLock<Document>>` + `NodeId`. Cloning is cheap. All non-trivial Rust work releases the Python GIL with `py.allow_threads(...)`.
+### Layer 2 — `whiskysour-py/src/lib.rs`
+PyO3 glue code only. `PyTag` = `Arc<RwLock<Document>>` + `NodeId`. Cloning is cheap. Parsing releases the Python GIL with `py.detach(...)` (PyO3 0.28's name for `allow_threads`); queries and serialisation release it via `read_doc_detached` when the subtree is large (≥ 4096 nodes). Always acquire the document lock inside the detached closure to avoid a GIL/lock deadlock.
 
 ### Layer 3 — `python/whiskeysour/__init__.py`
 The BeautifulSoup-compatible Python shim. Key components:
 - `Tag` — wraps `_Tag` (a `PyTag`), exposes the full BS4 API.
 - `NavigableString` — a `str` subclass with `name = None` (class attribute) and navigation properties.
 - `_AttrProxy` — a `dict` subclass that syncs mutations back to Rust. **Lazy**: only created when `.attrs` is accessed.
-- `_wrap(rust_obj)` — dispatches `node_type` to `Tag`, `NavigableString`, `Comment`, etc.
+- `_wrap(rust_obj)` — dispatches `node_type` to `Tag`, `NavigableString`, `Comment`, etc. for single nodes.
+- `_wrap_item(item)` / `_new_string(...)` — wrap the pre-classified Rust `*_items` lists used by `.contents`, `.children`, `.descendants` and `.strings` (element → `_Tag`; other nodes → `(kind, text, _Tag)`), avoiding per-node calls back into Rust.
 - `_python_filter` / `_needs_python_filter` — handles regex / callable / list filters in Python for filters Rust cannot express.
 - `WhiskeySour` / `BeautifulSoup` — the top-level constructors (same class, two names).
 
@@ -148,28 +149,38 @@ Violating these causes measurable regressions. A >5% regression against the base
 ### 2. Preserve the Rust fast path in `find_all`
 `_needs_python_filter` returns `False` when all filters are plain strings or booleans. In this case `find_all` delegates everything to Rust. Any Python-side work added to this code path will destroy the 7–14× speedups.
 
-### 3. Keep `_MULTI_VALUED_ATTRS` in sync
-The set in `__init__.py` and the `MULTI` slice in `lib.rs/get_coerced` must list the same attributes. If you add one, add it to both.
+### 3. Keep Rust/Python lookup tables in sync
+The `_MULTI_VALUED_ATTRS` set in `__init__.py` and the `MULTI` slice in `lib.rs/get_coerced` must list the same attributes. The item kind codes in `lib.rs/item_kind` must match `_ITEM_CLASSES` / `_DOCUMENT_KIND` in `__init__.py`. Change both sides together.
+
+### 3b. Preserve the `find()` fast path
+`Tag.find()` calls Rust `find` directly when `_needs_python_filter` is False. Don't route it back through `find_all(limit=1)` — that costs ~3× per call in per-item loops.
 
 ### 4. Use release builds for benchmarks
-Dev builds (`maturin develop`) are 2–3× slower than release builds. Never quote benchmark numbers from a dev build.
+Dev builds (`maturin develop`) are 2–3× slower than release builds. Never quote benchmark numbers from a dev build. Regenerate the README table with `python tests/python/performance/readme_table.py`.
+
+### 5. Measure memory with RSS, not `tracemalloc`
+`tracemalloc` only sees Python's allocator, so it misses the Rust arena entirely. `bench_memory.py` measures peak RSS in a fresh subprocess instead.
 
 ---
 
-## PyO3 version 0.22 API
+## PyO3 version 0.28 API
 
-This project uses PyO3 0.22. The old `&PyAny` API is gone.
+This project uses PyO3 0.28. The `_bound` constructors and the `PyObject` alias are gone.
 
 ```rust
-// ✓ Correct 0.22 patterns
-fn method<'py>(&self, py: Python<'py>, val: &Bound<'py, PyAny>) -> PyResult<PyObject>
-PyBytes::new_bound(py, &bytes)
-PyList::new_bound(py, &items)
-PyDict::new_bound(py)
-
-// ✗ Pre-0.22 (will not compile)
-fn method(&self, py: Python, val: &PyAny) -> PyResult<PyObject>
+// ✓ Correct 0.28 patterns
+fn method<'py>(&self, py: Python<'py>, val: &Bound<'py, PyAny>) -> PyResult<Py<PyAny>>
 PyBytes::new(py, &bytes)
+PyList::new(py, &items)
+PyDict::new(py)
+value.into_pyobject(py).unwrap().into_any().unbind()  // → Py<PyAny>
+py.detach(|| work())                                   // release the GIL
+
+// ✗ Older APIs (will not compile)
+fn method(&self, py: Python, val: &PyAny) -> PyResult<PyObject>
+PyBytes::new_bound(py, &bytes)
+value.into_py(py)
+py.allow_threads(|| work())
 ```
 
 `node_type` values: `"element"` | `"text"` | `"comment"` | `"cdata"` | `"doctype"` | `"document"`.
@@ -218,6 +229,7 @@ WS uses html5ever (the Firefox/Chrome HTML parser). It is more spec-correct than
 
 5. **Test file ownership** — add tests to the correct file:
    - Parsing behaviour → `test_parsing.py`
+   - Broken markup recovery → `test_malformed_html.py`
    - find / find_all filters → `test_find.py`
    - CSS selectors → `test_css_selectors.py`
    - Navigation (parent/children/siblings) → `test_tree_navigation.py`
@@ -232,7 +244,7 @@ WS uses html5ever (the Firefox/Chrome HTML parser). It is more spec-correct than
 ## Rust code rules
 
 - `cargo fmt` and `cargo clippy -- -D warnings` must pass. Clippy warnings are CI errors.
-- `whiskeysour-core` must have **zero PyO3 imports**. It is a pure Rust library.
+- `whiskysour-core` must have **zero PyO3 imports**. It is a pure Rust library.
 - Do not use `unwrap()` in production code. Use `?` or explicit `match`. `unwrap()` is permitted in tests and `#[cfg(test)]` blocks.
 - `NodeId` is `u32`. Do not widen it.
 - `unsafe` requires a `// SAFETY:` comment that explains why the block is sound and why a safe alternative is not available.
@@ -245,8 +257,8 @@ WS uses html5ever (the Firefox/Chrome HTML parser). It is more spec-correct than
 Before marking a PR ready for review:
 
 - [ ] `cargo fmt` passes (no diff)
-- [ ] `cargo clippy -- -D warnings` passes
-- [ ] `pytest tests/python/unit/ --override-ini="addopts=" -q` — 450+ passing
+- [ ] `cargo clippy --all-targets -- -D warnings` passes
+- [ ] `pytest tests/python/unit/ --override-ini="addopts=" -q` — 560+ passing
 - [ ] `pytest tests/python/integration/ --override-ini="addopts=" -q` — 58 passing
 - [ ] No performance regression >5% (run `bench_comparison.py` if touching hot paths)
 - [ ] New tests added for every changed behaviour

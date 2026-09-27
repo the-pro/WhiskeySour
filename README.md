@@ -6,36 +6,46 @@
 
 A high-performance drop-in replacement for Python's [BeautifulSoup](https://www.crummy.com/software/BeautifulSoup/), written in **Rust** and published as a native Python package via PyO3.
 
-**Status: Beta — core implementation complete. 450 unit tests passing, 508 including integration tests.**
+**Status:** stable — 561 unit, 58 BS4-parity integration and 16 property-based fuzz tests passing.
 
 ---
 
 ## Why WhiskeySour?
 
-BeautifulSoup is beloved but slow. Every node is a Python object (~500 bytes), parsing is GIL-bound, and CSS selectors re-parse on every call. WhiskeySour fixes this at the foundation.
+BeautifulSoup is beloved but slow: every node is a Python object and all parsing and matching runs in Python. WhiskeySour keeps the same API and moves the tree, the parser and the query engine into Rust.
 
-All numbers below are medians from a dev build (`maturin develop`). Release builds (`maturin develop --release`) are typically 2–3× faster still.
+Measured with a release build (`maturin develop --release`) against `bs4` 4.15 + `html.parser`, Python 3.14, Apple Silicon. Query rows use the 100 KB document; each figure is the best of three medians.
 
 | Operation | WhiskeySour | bs4 + html.parser | Speedup |
 |-----------|-------------|-------------------|---------|
-| Parse 10KB | 0.33 ms | 3.78 ms | **11×** |
-| Parse 100KB | 4.08 ms | 42.87 ms | **11×** |
-| Parse 500KB | 9.99 ms | 106.37 ms | **11×** |
-| `find(id=…)` | 0.21 ms | 2.21 ms | **11×** |
-| `find_all(class_=…)` | 0.62 ms | 4.41 ms | **7×** |
-| `select("div.item")` | 0.64 ms | 8.92 ms | **14×** |
-| `get_text()` | 0.17 ms | 0.68 ms | **4×** |
-| `str()` (serialize) | 0.43 ms | 21.58 ms | **50×** |
-| `tag.get("class")` | 0.29 µs | 7.0 µs | **24×** |
-| Memory per node | ~40 bytes | ~500 bytes | **12× less** |
+| Parse 10 KB | 105 µs | 1.42 ms | **14×** |
+| Parse 100 KB | 1.04 ms | 14.49 ms | **14×** |
+| Parse 500 KB | 5.27 ms | 73.07 ms | **14×** |
+| `find(id=…)` | 8.29 µs | 636 µs | **77×** |
+| `find_all(class_=…)` | 34 µs | 1.31 ms | **39×** |
+| `find_all(string=…)` | 14 µs | 533 µs | **38×** |
+| `select("div.item")` | 49 µs | 1.43 ms | **29×** |
+| `select("div:nth-child(2n)")` | 38 µs | 2.18 ms | **58×** |
+| `select_one(…)` on 100 items | 16 µs | 516 µs | **33×** |
+| `find(…)` on 100 items | 37 µs | 241 µs | **6.6×** |
+| `get_text()` | 14 µs | 195 µs | **14×** |
+| `str()` (serialize) | 69 µs | 7.74 ms | **113×** |
+| `prettify()` | 75 µs | 8.88 ms | **119×** |
+| iterate `.descendants` | 491 µs | 111 µs | bs4 ~4.4× faster¹ |
+| `list(.strings)` | 228 µs | 186 µs | bs4 ~1.2× faster¹ |
+| `tag.get("class")` | 0.13 µs | 0.04 µs | bs4 ~3.1× faster¹ |
+| Memory per node | ~210–250 bytes | ~650 bytes | **~3× less** |
+
+¹ bs4's tree *is* a tree of Python objects, so walking it node by node or reading one attribute is a plain attribute/dict access. WhiskeySour has to cross into Rust and build a Python wrapper for each node it hands back (the Rust walk itself takes ~2.4 ns per node). When you need many nodes, let Rust do the filtering — `find_all`, `select`, `get_text()`, `find_all(string=…)` — rather than iterating `.descendants` / `.strings` in Python.
+
+Regenerate this table with `python tests/python/performance/readme_table.py` and the memory row with `pytest tests/python/performance/bench_memory.py -s`. For an HTML report across five document shapes, run `python tests/python/performance/bench_comparison.py`.
 
 Key implementation choices:
 - **Rust core** via [PyO3](https://pyo3.rs) + [maturin](https://www.maturin.rs)
-- **[html5ever](https://github.com/servo/html5ever)** — spec-compliant HTML5 parser (same as Firefox/Chrome)
-- **Arena allocation** — compact ~40 byte/node layout vs ~500 bytes in bs4
-- **[cssparser](https://github.com/servo/rust-cssparser)** — CSS selectors compiled to DFA, LRU-cached
-- **GIL release** — all Rust tree operations run outside the Python GIL
-- **[memchr](https://github.com/BurntSushi/memchr)** — SIMD byte scanning (SSE2 / AVX2 / NEON)
+- **[html5ever](https://github.com/servo/html5ever)** — spec-compliant HTML5 parser (from the Servo project)
+- **Compact arena** — the whole tree is one flat `Vec` of 56-byte nodes addressed by `u32` ids (element data is boxed, links are 4 bytes); traversal follows index links without allocating
+- **Hand-written CSS selector engine** — parsed selectors are cached per thread, and `:nth-*` indices are memoised per query so long lists stay linear
+- **GIL release** — parsing, and queries or serialisation over large subtrees, run outside the Python GIL, so threads can work on documents concurrently
 
 ---
 
@@ -66,7 +76,7 @@ from whiskeysour import BeautifulSoup   # same class, different name
 ### WhiskeySour extensions (not in bs4)
 
 ```python
-# Pre-compiled CSS selector — zero parse overhead on repeated use
+# Reusable CSS selector — the parsed selector is cached, so repeated use skips re-parsing
 q = soup.compile("div.item > a[href]")
 for doc in documents:
     results = q.select(doc)
@@ -114,16 +124,17 @@ WhiskeySour/
 ├── pytest.ini                  # test configuration
 │
 ├── crates/
-│   ├── whiskeysour-core/        # Pure Rust library (no Python deps)
+│   ├── whiskysour-core/         # Pure Rust library (no Python deps)
 │   │   └── src/
 │   │       ├── parser/         # html5ever integration
 │   │       ├── node.rs         # Arena-allocated node pool
-│   │       ├── selector/       # CSS selector DFA + LRU cache
+│   │       ├── selector/       # CSS selector parser, matcher + per-thread cache
 │   │       ├── traversal/      # Tree iterators
 │   │       ├── query/          # find() / find_all() / select()
 │   │       └── serialize/      # HTML serialisation + prettify
+│   │   └── benches/            # Criterion benchmarks (parse, find, select, serialize)
 │   │
-│   └── whiskeysour-py/          # PyO3 bindings layer
+│   └── whiskysour-py/           # PyO3 bindings layer
 │       └── src/
 │           └── lib.rs          # _Tag, _Document Python classes
 │
@@ -135,7 +146,7 @@ WhiskeySour/
 └── tests/
     └── python/
         ├── conftest.py
-        ├── unit/               # 450 tests across 10 files
+        ├── unit/               # 561 tests across 11 files
         ├── integration/        # bs4 API parity tests (58 tests)
         ├── performance/        # pytest-benchmark suites + comparison report
         └── fuzz/               # Hypothesis property tests (16 tests)
@@ -184,8 +195,16 @@ pytest -m "not slow"
 # Fuzz / property-based tests (requires hypothesis)
 pytest tests/python/fuzz/ -v
 
-# Benchmark suites (requires pytest-benchmark)
-pytest tests/python/performance/ --benchmark-only -v
+# Benchmark suites (requires pytest-benchmark; build with --release first).
+# Includes per-item navigation benchmarks and a 4-thread scaling check.
+pytest tests/python/performance/ --override-ini="addopts=" -q
+
+# Memory usage vs bs4 (peak RSS in a fresh process; POSIX only)
+pytest tests/python/performance/bench_memory.py --override-ini="addopts=" -q -s
+
+# Rust-level Criterion benchmarks (parse, find_all/find_one, tree walk,
+# get_text, select incl. :nth-*, serialize/prettify)
+cargo bench -p whiskysour-core
 
 # Performance comparison report (WhiskeySour vs BeautifulSoup)
 python tests/python/performance/bench_comparison.py
@@ -198,16 +217,17 @@ open bench_report.html
 
 | File | Tests | Covers |
 |------|-------|--------|
-| `unit/test_parsing.py` | 67 | HTML5 parsing, fragments, malformed HTML, void elements |
+| `unit/test_parsing.py` | 67 | HTML5 parsing, fragments, void elements |
+| `unit/test_malformed_html.py` | 52 | Broken markup recovery, misnesting, stray tags |
 | `unit/test_encoding.py` | 31 | UTF-8/16, Latin-1, BOM, meta charset, surrogate pairs |
-| `unit/test_find.py` | 60 | find/find_all by tag/id/class/attr/string/regex/lambda |
-| `unit/test_css_selectors.py` | 71 | CSS3 + :has/:is/:where, structural pseudo-classes |
-| `unit/test_tree_navigation.py` | 67 | parent/children/siblings/descendants/.string/.strings |
+| `unit/test_find.py` | 85 | find/find_all by tag/id/class/attr/string/regex/lambda, `limit` |
+| `unit/test_css_selectors.py` | 83 | CSS3 + :has/:is/:where, structural pseudo-classes, `limit`, compiled selectors |
+| `unit/test_tree_navigation.py` | 76 | parent/children/siblings/descendants/.string/.strings/get_text |
 | `unit/test_modification.py` | 49 | decompose/extract/replace_with/insert/append/wrap |
-| `unit/test_output.py` | 43 | str()/prettify()/encode()/round-trip stability |
-| `unit/test_edge_cases.py` | 44 | 10k+ nodes, deep nesting, concurrency, control chars |
+| `unit/test_output.py` | 47 | str()/prettify()/encode()/escaping/round-trip stability |
+| `unit/test_edge_cases.py` | 45 | 10k+ nodes, deep nesting, concurrency (incl. queries racing mutation), control chars |
 | `unit/test_streaming.py` | 19 | StreamParser push API, parse_stream() generator |
-| `unit/test_css_selectors.py` | 71 | CompiledSelector, cached selectors |
+| `unit/test_review_fixes.py` | 7 | Regression tests for reviewed bugs |
 | `integration/test_bs4_compat.py` | 58 | Every public bs4 API, cross-library parity |
 | `fuzz/fuzz_parser.py` | 16 | Hypothesis: no crash, valid UTF-8, round-trip stable |
 
@@ -224,7 +244,7 @@ open bench_report.html
 
 ```bash
 # Rust checks (no build required)
-~/.cargo/bin/cargo check -p whiskeysour-py
+~/.cargo/bin/cargo check -p whiskysour-py
 
 # Dev build (fast recompile, debug symbols)
 maturin develop
@@ -235,9 +255,9 @@ maturin develop --release
 # Rust tests
 cargo test
 
-# Formatting / linting
+# Formatting / linting (clippy warnings are errors)
 cargo fmt
-cargo clippy
+cargo clippy --all-targets -- -D warnings
 ```
 
 ---
@@ -256,8 +276,8 @@ maturin publish
 
 1. All changes must be accompanied by tests
 2. Run `pytest tests/python/unit/ -m "not slow"` before submitting
-3. Run `cargo fmt` and `cargo clippy` for Rust changes
-4. Performance regressions > 5% against the baseline will block merge
+3. Run `cargo fmt` and `cargo clippy --all-targets -- -D warnings` for Rust changes
+4. Performance regressions > 5% against the baseline will block merge — benchmark with a release build
 
 ---
 
