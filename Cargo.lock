@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "whiskysour-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "criterion",
  "html5ever",
@@ -845,7 +845,7 @@ dependencies = [
 
 [[package]]
 name = "whiskysour-py"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "markup5ever",
  "pyo3",
